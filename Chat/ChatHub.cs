@@ -74,6 +74,21 @@ public sealed class ChatHub : Hub
         }
     }
 
+    /// <summary>Toggles the caller's reaction on a message and fans the result out to the room.</summary>
+    public async Task React(long messageId, string emoji)
+    {
+        var user = CurrentUser;
+        if (user is null) return;
+        emoji = (emoji ?? "").Trim();
+        if (emoji.Length is 0 or > 16) return;
+
+        var result = _state.ToggleReaction(messageId, user.Id, emoji);
+        if (result is null) return;
+        var (roomKey, userIds) = result.Value;
+
+        await Clients.Group(roomKey).SendAsync("ReactionChanged", messageId, emoji, userIds);
+    }
+
     public async Task UserTyping(string roomKey, bool isTyping)
     {
         var user = CurrentUser;

@@ -23,6 +23,8 @@ public sealed class ChatState
 
     private long _nextId;
     private readonly object _historyLock = new();
+    private readonly object _reactionLock = new();
+    private readonly Dictionary<long, string> _msgRoom = new();          // messageId -> roomKey
 
     public ChatState()
     {
@@ -111,13 +113,39 @@ public sealed class ChatState
         {
             var list = _messages.GetOrAdd(roomKey, _ => new List<ChatMessage>());
             list.Add(msg);
+            _msgRoom[msg.Id] = roomKey;
             if (list.Count > MaxHistoryPerRoom)
             {
+                _msgRoom.Remove(list[0].Id);
                 list.RemoveAt(0);
             }
         }
         _lastSeen[user.Id] = DateTimeOffset.Now;
         return msg;
+    }
+
+    /// <summary>Toggles a user's reaction on a message. Returns the room and the
+    /// resulting reacting-user ids for that emoji (empty array = reaction removed).</summary>
+    public (string RoomKey, string[] UserIds)? ToggleReaction(long messageId, string userId, string emoji)
+    {
+        lock (_reactionLock)
+        {
+            if (!_msgRoom.TryGetValue(messageId, out var roomKey)) return null;
+            var msg = History(roomKey).FirstOrDefault(m => m.Id == messageId);
+            if (msg is null) return null;
+
+            if (!msg.Reactions.TryGetValue(emoji, out var set))
+            {
+                set = new HashSet<string>(StringComparer.Ordinal);
+                msg.Reactions[emoji] = set;
+            }
+
+            if (!set.Remove(userId)) set.Add(userId);
+            if (set.Count == 0) msg.Reactions.Remove(emoji);
+
+            var ids = set.OrderBy(x => x, StringComparer.Ordinal).ToArray();
+            return (roomKey, ids);
+        }
     }
 
     public bool SetTyping(string connectionId, string userId, string roomKey, bool isTyping)
