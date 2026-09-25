@@ -1,0 +1,535 @@
+﻿@page "/"
+@rendermode @(new InteractiveServerRenderMode(prerender: false))
+
+@inject ChatState ChatState
+@inject SessionState Session
+@inject NavigationManager Nav
+@inject IJSRuntime JS
+
+<div class="messenger">
+    <header class="topbar">
+        <div class="brand">
+            <div class="brand-logo">💬</div>
+            <div class="brand-text">
+                <div class="brand-name">BlazerSignalRChat</div>
+                <div class="brand-tagline">Blazor Server · SignalR demo</div>
+            </div>
+        </div>
+
+        <div class="conn-pill @StatusCss" title="@StatusText">
+            <span class="conn-dot"></span>
+            <span>@StatusText</span>
+        </div>
+
+        <div class="user-switcher">
+            <span class="switcher-label">Chatting as</span>
+            <label class="switcher-control" style="--hue:@(_me?.Hue ?? 0)">
+                <span class="avatar">@(_me is null ? "?" : InitialOf(_me.DisplayName))</span>
+                <select value="@_me?.Id" @onchange="OnUserChanged">
+                    @foreach (var u in ChatState.Users)
+                    {
+                        <option value="@u.Id">@u.DisplayName</option>
+                    }
+                </select>
+            </label>
+        </div>
+    </header>
+
+    <div class="app-body">
+        <aside class="sidebar">
+            <nav class="tabs">
+                <button class="tab @(_tab == "chats" ? "active" : "")" @onclick="() => ShowTab(0)">
+                    Chats
+                    @if (TotalUnread > 0)
+                    {
+                        <span class="badge">@TotalUnread</span>
+                    }
+                </button>
+                <button class="tab @(_tab == "friends" ? "active" : "")" @onclick="() => ShowTab(1)">Friends</button>
+                <button class="tab @(_tab == "archived" ? "active" : "")" @onclick="() => ShowTab(2)">Archived</button>
+            </nav>
+
+            <div class="panel">
+                @if (_tab == "chats")
+                {
+                    @foreach (var room in ChatState.Rooms)
+                    {
+                        if (!Session.ArchivedRooms.Contains(room.Key))
+                        {
+                            @RoomRow(room)
+                        }
+                    }
+                    if (ChatState.Rooms.All(r => Session.ArchivedRooms.Contains(r.Key)))
+                    {
+                        <div class="empty-state">No chats. Open one from the Archived tab.</div>
+                    }
+                }
+                else if (_tab == "friends")
+                {
+                    @foreach (var u in ChatState.Users)
+                    {
+                        <div class="friend-row" @onclick="() => SwitchUser(u.Id)">
+                            <div class="avatar" style="--hue:@u.Hue">@InitialOf(u.DisplayName)</div>
+                            <div class="friend-meta">
+                                <div class="friend-name">@u.DisplayName
+                                    @if (u.Id == _me?.Id)
+                                    {
+                                        <span class="you-tag">you</span>
+                                    }
+                                </div>
+                                <div class="friend-bio">@u.Bio</div>
+                            </div>
+                            <div class="presence @(IsOnline(u.Id) ? "online" : "")">
+                                <span class="presence-dot"></span>
+                                <span class="presence-text">@ChatState.LastSeenText(u.Id)</span>
+                            </div>
+                        </div>
+                    }
+                }
+                else
+                {
+                    @foreach (var room in ChatState.Rooms)
+                    {
+                        if (Session.ArchivedRooms.Contains(room.Key))
+                        {
+                            <div class="room-row">
+                                <div class="avatar" style="--hue:@room.Hue">@room.Title[0]</div>
+                                <div class="room-meta">
+                                    <div class="room-title">@room.Title</div>
+                                    <div class="room-desc">@room.Description</div>
+                                </div>
+                                <button class="icon-btn" title="Restore" @onclick="() => ToggleArchive(room.Key)">↺</button>
+                            </div>
+                        }
+                    }
+                    if (!ChatState.Rooms.Any(r => Session.ArchivedRooms.Contains(r.Key)))
+                    {
+                        <div class="empty-state">Nothing archived yet.<br />Archive a chat with the 📦 button its header.</div>
+                    }
+                }
+            </div>
+
+            <footer class="sidebar-footer">5 demo users · 3 chat rooms · open more tabs to chat live</footer>
+        </aside>
+
+        <main class="chat">
+            @if (_activeRoom is null || _activeRoomInfo is null)
+            {
+                <div class="empty-state big"><span class="big-icon">💬</span>Pick a chat to start talking</div>
+            }
+            else
+            {
+                <header class="chat-header">
+                    <div class="avatar" style="--hue:@_activeRoomInfo.Hue">@_activeRoomInfo.Title[0]</div>
+                    <div class="chat-title-wrap">
+                        <div class="chat-title">@_activeRoomInfo.Title</div>
+                        <div class="chat-sub">
+                            @_activeRoomInfo.Description
+                            · @_activeMembers.Count member(s), @_activeOnline.Length online
+                        </div>
+                    </div>
+                    <div class="member-chips">
+                        @foreach (var pid in _activeMembers)
+                        {
+                            var u = ChatState.GetUser(pid);
+                            if (u is null) { continue; }
+                            <span class="chip" title="@u.DisplayName">
+                                <div class="avatar sm" style="--hue:@u.Hue">
+                                    <i class="presence-dot @(IsOnline(u.Id) ? "on" : "")"></i>@InitialOf(u.DisplayName)
+                                </div>
+                            </span>
+                        }
+                    </div>
+                    <button class="icon-btn" title="@(IsArchived ? "Restore chat" : "Archive chat")" @onclick="() => ToggleArchive(_activeRoom)">
+                        @(IsArchived ? "↺" : "📦")
+                    </button>
+                </header>
+
+                <div class="feed" @ref="_feed">
+                    @foreach (var sys in _systemLines)
+                    {
+                        <div class="sys-line">@sys</div>
+                    }
+                    @foreach (var m in _messages)
+                    {
+                        var mine = m.User.Id == _me?.Id;
+                        <div class="msg-row @(mine ? "mine" : "theirs")">
+                            @if (!mine)
+                            {
+                                <div class="avatar" style="--hue:@m.User.Hue">@InitialOf(m.User.DisplayName)</div>
+                            }
+                            <div class="msg">
+                                @if (!mine)
+                                {
+                                    <div class="msg-name">@m.User.DisplayName <span class="msg-time">@m.SentAt.ToLocalTime().ToString("HH:mm")</span></div>
+                                }
+                                else
+                                {
+                                    <div class="msg-time right">@m.SentAt.ToLocalTime().ToString("HH:mm")</div>
+                                }
+                                <div class="bubble">@m.Text</div>
+                            </div>
+                        </div>
+                    }
+                    @if (_typing.Any())
+                    {
+                        <div class="typing-line">
+                            <span class="typing-dots"><i></i><i></i><i></i></span>
+                            @TypingLabel
+                        </div>
+                    }
+                </div>
+
+                <footer class="composer">
+                    <input id="message-input"
+                           class="composer-input"
+                           placeholder="Message @_activeRoomInfo.Title…"
+                           value="@_input"
+                           @oninput="OnInput"
+                           @onkeydown="OnKeyDown"
+                           @onblur="StopTyping" />
+                    <button class="send-btn" disabled="@(string.IsNullOrWhiteSpace(_input) || _hub?.State != HubConnectionState.Connected)" @onclick="SendMessage">
+                        <span>➤</span>
+                    </button>
+                </footer>
+            }
+        </main>
+    </div>
+</div>
+
+@code {
+    private const string StorageKey = "bsc_user";
+
+    private HubConnection? _hub;
+    private string _tab = "chats";
+    private string _activeRoom = "general";
+    private ChatUser? _me;
+    private ChatRoom? _activeRoomInfo;
+    private List<ChatMessage> _messages = new();
+    private List<string> _systemLines = new();
+    private HashSet<string> _typing = new();
+    private List<string> _activeMembers = new();
+    private string[] _activeOnline = Array.Empty<string>();
+    private string _input = "";
+    private string _status = "connecting";
+    private DateTimeOffset _lastTypeSentAt;
+    private ElementReference _feed;
+
+    private int TotalUnread => Session.Unread.Values.Sum();
+    private bool IsArchived => Session.ArchivedRooms.Contains(_activeRoom);
+    private string StatusText => _status switch
+    {
+        "connected" => "Connected",
+        "reconnecting" => "Reconnecting…",
+        "failed" => "Offline",
+        _ => "Connecting…"
+    };
+    private string StatusCss => _status switch
+    {
+        "connected" => "ok",
+        "reconnecting" => "warn",
+        "failed" => "bad",
+        _ => "idle"
+    };
+    private string TypingLabel
+    {
+        get
+        {
+            var names = _typing.Select(id => ChatState.GetUser(id)?.DisplayName).Where(n => n is not null).Cast<string>().ToList();
+            return names.Count switch
+            {
+                0 => "",
+                1 => $"{names[0]} is typing…",
+                2 => $"{names[0]} and {names[1]} are typing…",
+                _ => $"{string.Join(", ", names.Take(names.Count - 1))} and {names[^1]} are typing…"
+            };
+        }
+    }
+
+    protected override async Task OnInitializedAsync()
+    {
+        var stored = await JS.InvokeAsync<string>("sessionStorage.getItem", StorageKey).AsTask();
+        var userId = string.IsNullOrEmpty(stored) ? Session.CurrentUserId : stored;
+        if (ChatState.GetUser(userId) is { } user)
+        {
+            _me = user;
+            Session.CurrentUserId = user.Id;
+        }
+        else
+        {
+            _me = ChatState.GetUser("alice");
+        }
+        _activeRoomInfo = ChatState.GetRoom(_activeRoom);
+        await ConnectHub();
+    }
+
+    private async Task ConnectHub()
+    {
+        _status = "connecting";
+
+        var hubUrl = $"{Nav.ToAbsoluteUri("/chat")}?user={Uri.EscapeDataString(_me!.Id)}";
+        var hub = new HubConnectionBuilder()
+            .WithUrl(hubUrl)
+            .WithAutomaticReconnect()
+            .Build();
+
+        hub.On<string, List<ChatMessage>, List<ChatUser>>("JoinedRoom", (room, history, participants) =>
+        {
+            if (room == _activeRoom)
+            {
+                _messages = history;
+                _activeMembers = participants.Select(p => p.Id).ToList();
+                _typing.Clear();
+                _systemLines.Clear();
+            }
+            _ = InvokeAsync(StateHasChanged);
+        });
+        hub.On<ChatMessage>("ReceiveMessage", msg =>
+        {
+            if (Session.ArchivedRooms.Contains(msg.RoomKey)) return;
+            if (msg.RoomKey == _activeRoom)
+            {
+                if (_messages.All(m => m.Id != msg.Id))
+                {
+                    _messages.Add(msg);
+                }
+                _typing.Remove(msg.User.Id);
+            }
+            else
+            {
+                Session.Unread.TryGetValue(msg.RoomKey, out var c);
+                Session.Unread[msg.RoomKey] = c + 1;
+            }
+            _ = InvokeAsync(StateHasChanged);
+        });
+        hub.On<string, string>("SystemEvent", (room, line) =>
+        {
+            if (room == _activeRoom)
+            {
+                _systemLines.Add(line);
+                if (_systemLines.Count > 20) _systemLines.RemoveAt(0);
+            }
+            _ = InvokeAsync(StateHasChanged);
+        });
+        hub.On<string, string[]>("TypingChanged", (room, ids) =>
+        {
+            if (room == _activeRoom)
+            {
+                _typing = ids.Where(id => id != _me!.Id).ToHashSet();
+            }
+            _ = InvokeAsync(StateHasChanged);
+        });
+        hub.On<string[]>("OnlineUsersChanged", ids =>
+        {
+            _ = InvokeAsync(StateHasChanged);
+        });
+        hub.On<string, string[]>("RoomPresenceChanged", (room, ids) =>
+        {
+            if (room == _activeRoom)
+            {
+                _activeOnline = ids;
+            }
+            _ = InvokeAsync(StateHasChanged);
+        });
+
+        hub.Reconnecting += ex =>
+        {
+            _status = "reconnecting";
+            _ = InvokeAsync(StateHasChanged);
+            return Task.CompletedTask;
+        };
+        hub.Reconnected += async ctx =>
+        {
+            _status = "connected";
+            try { await hub.SendAsync("JoinRoom", _activeRoom); } catch { }
+            _ = InvokeAsync(StateHasChanged);
+        };
+        hub.Closed += ex =>
+        {
+            _status = _status == "reconnecting" ? "reconnecting" : "failed";
+            _ = InvokeAsync(StateHasChanged);
+            return Task.CompletedTask;
+        };
+
+        _hub = hub;
+        await hub.StartAsync();
+        _status = "connected";
+        await hub.SendAsync("JoinRoom", _activeRoom);
+        StateHasChanged();
+    }
+
+    private async Task StopHub()
+    {
+        if (_hub is not null)
+        {
+            try { await _hub.StopAsync(); } catch { }
+            _hub = null;
+        }
+    }
+
+    protected override async Task OnAfterRenderAsync(bool firstRender)
+    {
+        if (_status == "connected")
+        {
+            await JS.InvokeVoidAsync("chatScroll", _feed);
+        }
+    }
+
+    public async ValueTask DisposeAsync()
+    {
+        await StopHub();
+    }
+
+    private async Task OnUserChanged(ChangeEventArgs e)
+    {
+        var id = e.Value?.ToString();
+        if (id is null) return;
+        await SwitchUser(id);
+    }
+
+    private async Task SwitchUser(string id)
+    {
+        if (id == _me?.Id) return;
+        await StopHub();
+        _me = ChatState.GetUser(id);
+        Session.CurrentUserId = id!;
+        Session.Unread.Clear();
+        _messages = new();
+        _typing.Clear();
+        _systemLines.Clear();
+        await JS.InvokeVoidAsync("sessionStorage.setItem", StorageKey, id);
+        await ConnectHub();
+    }
+
+    private void ShowTab(int index) => _tab = index switch
+    {
+        0 => "chats",
+        1 => "friends",
+        _ => "archived"
+    };
+
+    private async Task SelectRoom(string roomKey)
+    {
+        if (roomKey == _activeRoom) return;
+        if (Session.ArchivedRooms.Contains(roomKey)) return;
+        var old = _activeRoom;
+        _activeRoom = roomKey;
+        _activeRoomInfo = ChatState.GetRoom(roomKey);
+        Session.Unread[roomKey] = 0;
+        _messages = new();
+        _typing.Clear();
+        _systemLines.Clear();
+        if (_hub is { State: HubConnectionState.Connected })
+        {
+            try
+            {
+                if (ChatState.GetRoom(old) is not null)
+                {
+                    await _hub.SendAsync("LeaveRoom", old);
+                }
+                await _hub.SendAsync("JoinRoom", roomKey);
+            }
+            catch { }
+        }
+    }
+
+    private async Task ToggleArchive(string? roomKey)
+    {
+        if (roomKey is null) return;
+        if (Session.ArchivedRooms.Contains(roomKey))
+        {
+            Session.ArchivedRooms.Remove(roomKey);
+        }
+        else
+        {
+            Session.ArchivedRooms.Add(roomKey);
+            Session.Unread[roomKey] = 0;
+            if (roomKey == _activeRoom)
+            {
+                _messages = new();
+                _typing.Clear();
+            }
+        }
+    }
+
+    private async Task OnKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter" && !string.IsNullOrWhiteSpace(_input))
+        {
+            await SendMessage();
+        }
+    }
+
+    private void OnInput(ChangeEventArgs e)
+    {
+        _input = e.Value?.ToString() ?? "";
+        if (_hub is { State: HubConnectionState.Connected } && !string.IsNullOrWhiteSpace(_input))
+        {
+            if ((DateTimeOffset.Now - _lastTypeSentAt).TotalMilliseconds > 500)
+            {
+                _lastTypeSentAt = DateTimeOffset.Now;
+                _ = FireTyping(true);
+            }
+        }
+    }
+
+    private void StopTyping() => _ = FireTyping(false);
+
+    private async Task FireTyping(bool typing)
+    {
+        if (_hub is null) return;
+        var room = _activeRoom;
+        try { await _hub.SendAsync("UserTyping", room, typing); } catch { }
+    }
+
+    private async Task SendMessage()
+    {
+        var text = _input.Trim();
+        _input = "";
+        if (string.IsNullOrEmpty(text) || _hub is not { State: HubConnectionState.Connected }) return;
+        await FireTyping(false);
+        try
+        {
+            await _hub.SendAsync("SendMessage", _activeRoom, text);
+        }
+        catch { }
+        await JS.InvokeVoidAsync("chatFocus", "message-input");
+    }
+
+    private bool IsOnline(string id) => ChatState.IsOnline(id);
+
+    private static string InitialOf(string name) => name.Length > 0 ? name[0].ToString() : "?";
+
+    // Razor-local helpers reused in markup lambdas.
+    private RenderFragment RoomRow(ChatRoom room) => __builder =>
+    {
+        <div class="room-row @(room.Key == _activeRoom ? "active" : "")" @onclick="() => SelectRoom(room.Key)">
+            <div class="avatar" style="--hue:@room.Hue">@room.Title[0]</div>
+            <div class="room-meta">
+                <div class="room-title">
+                    @room.Title
+                    @if (Session.Unread.TryGetValue(room.Key, out var unread) && unread > 0)
+                    {
+                        <span class="badge">@unread</span>
+                    }
+                </div>
+                <div class="room-desc">
+                    @if (ChatState.LastMessage(room.Key) is { } last)
+                    {
+                        <text>@last.User.DisplayName: @last.Text</text>
+                    }
+                    else
+                    {
+                        <text>No messages yet</text>
+                    }
+                </div>
+            </div>
+            <div class="room-meta-right">
+                @if (_activeOnline.Length > 0 && room.Key == _activeRoom)
+                {
+                    <div class="online-count">● @_activeOnline.Length</div>
+                }
+            </div>
+        </div>;
+    };
+}
