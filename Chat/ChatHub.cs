@@ -31,13 +31,18 @@ public sealed class ChatHub : Hub
         var user = CurrentUser;
         if (user is null || _state.GetRoom(roomKey) is null) return;
 
-        _state.AddConnectionRoom(Context.ConnectionId, roomKey);
+        var firstJoin = _state.AddConnectionRoom(Context.ConnectionId, roomKey);
         await Groups.AddToGroupAsync(Context.ConnectionId, roomKey);
 
         var snapshot = _state.SnapshotFor(roomKey);
         await Clients.Caller.SendAsync("JoinedRoom", roomKey, snapshot.History, snapshot.Participants);
-        await Clients.GroupExcept(roomKey, Context.ConnectionId).SendAsync("SystemEvent", roomKey, $"{user.DisplayName} joined");
-        await Clients.Group(roomKey).SendAsync("RoomPresenceChanged", roomKey, _state.RoomOnline(roomKey));
+        if (firstJoin)
+        {
+            // Keep the feed quiet on tab switches: the "joined" line is only
+            // broadcast the first time this connection subscribes.
+            await Clients.GroupExcept(roomKey, Context.ConnectionId).SendAsync("SystemEvent", roomKey, $"{user.DisplayName} joined");
+            await Clients.Group(roomKey).SendAsync("RoomPresenceChanged", roomKey, _state.RoomOnline(roomKey));
+        }
     }
 
     public async Task LeaveRoom(string roomKey)

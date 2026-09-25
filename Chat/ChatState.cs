@@ -83,12 +83,13 @@ public sealed class ChatState
         }
     }
 
-    public void AddConnectionRoom(string connectionId, string roomKey)
+    /// <summary>Adds a room to a connection's subscriptions. Returns true when it is a first-time join.</summary>
+    public bool AddConnectionRoom(string connectionId, string roomKey)
     {
         var set = _connRooms.GetOrAdd(connectionId, _ => new HashSet<string>(StringComparer.Ordinal));
         lock (set)
         {
-            set.Add(roomKey);
+            return set.Add(roomKey);
         }
     }
 
@@ -186,9 +187,9 @@ public sealed class ChatState
 
         var rooms = new[]
         {
-            new ChatRoom("general", "General", "Chat with everyone", 0),
-            new ChatRoom("announcements", "Announcements", "Team updates", 3),
-            new ChatRoom("random", "Random", "Off-topic fun", 4),
+            new ChatRoom("general", "General", "Chat with everyone", 0, "group"),
+            new ChatRoom("announcements", "Announcements", "Team updates", 3, "group"),
+            new ChatRoom("random", "Random", "Off-topic fun", 4, "community"),
         };
         foreach (var r in rooms) _rooms[r.Key] = r;
 

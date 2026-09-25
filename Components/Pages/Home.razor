@@ -76,18 +76,30 @@
                 <button class="tab @(_tab == "archived" ? "active" : "")" @onclick="() => ShowTab(2)">Archived</button>
             </nav>
 
+            @if (_tab == "chats")
+            {
+                <div class="filter-chips">
+                    <button class="chip-btn @(_filter == "all" ? "active" : "")" @onclick='() => _filter = "all"'>All</button>
+                    <button class="chip-btn @(_filter == "unread" ? "active" : "")" @onclick='() => _filter = "unread"'>Unread</button>
+                    <button class="chip-btn @(_filter == "groups" ? "active" : "")" @onclick='() => _filter = "groups"'>Groups</button>
+                    <button class="chip-btn @(_filter == "communities" ? "active" : "")" @onclick='() => _filter = "communities"'>Communities</button>
+                </div>
+            }
+
             <div class="panel">
                 @if (_tab == "chats")
                 {
-                    @foreach (var room in ChatState.Rooms)
+                    @foreach (var room in ChatState.Rooms.Where(r => PassesFilter(r.Key, r)))
                     {
                         if (Session.ArchivedRooms.Contains(room.Key)) { continue; }
                         if (!MatchesSearch(room.Title, room.Description)) { continue; }
                         @RoomRow(room)
                     }
-                    if (ChatState.Rooms.All(r => Session.ArchivedRooms.Contains(r.Key)))
+                    var visible = ChatState.Rooms.Where(r => PassesFilter(r.Key, r))
+                        .Count(r => !Session.ArchivedRooms.Contains(r.Key) && MatchesSearch(r.Title, r.Description));
+                    if (visible == 0)
                     {
-                        <div class="empty-state">No chats. Open one from the Archived tab.</div>
+                        <div class="empty-state">@EmptyText</div>
                     }
                 }
                 else if (_tab == "friends")
@@ -158,7 +170,8 @@
             }
             else
             {
-                <header class="chat-header">
+                <div class="chat-col">
+                    <header class="chat-header">
                     <div class="chat-title-wrap">
                         <div class="chat-title">@_activeRoomInfo.Title</div>
                         <div class="chat-sub">@_activeRoomInfo.Description · @_activeMembers.Count member(s), @_activeOnline.Length online</div>
@@ -230,6 +243,36 @@
                         </svg>
                     </button>
                 </footer>
+                </div>
+
+                <aside class="chat-meta">
+                    <div class="meta-header">
+                        <div class="meta-title">Members</div>
+                        <div class="meta-sub">@_activeMembers.Count · @_activeOnline.Length online</div>
+                    </div>
+                    <div class="meta-list">
+                        @foreach (var u in MemberProfiles)
+                        {
+                            <div class="mem-row @(u.Id == _me?.Id ? "self" : "")">
+                                <div class="avatar has-dot" style="--hue:@u.Hue">
+                                    @InitialOf(u.DisplayName)
+                                    <i class="presence-dot @(IsOnline(u.Id) ? "on" : "")"></i>
+                                </div>
+                                <div class="mem-body">
+                                    <div class="mem-name">
+                                        @u.DisplayName
+                                        @if (u.Id == _me?.Id)
+                                        {
+                                            <span class="you-tag">you</span>
+                                        }
+                                    </div>
+                                    <div class="mem-bio">@u.Bio</div>
+                                </div>
+                                <div class="mem-status @(IsOnline(u.Id) ? "live" : "")">@ChatState.LastSeenText(u.Id)</div>
+                            </div>
+                        }
+                    </div>
+                </aside>
             }
         </main>
     </div>
@@ -240,6 +283,7 @@
 
     private HubConnection? _hub;
     private string _tab = "chats";
+    private string _filter = "all";
     private string _search = "";
     private string _activeRoom = "general";
     private ChatUser? _me;
@@ -380,7 +424,7 @@
         hub.Reconnected += async ctx =>
         {
             _status = "connected";
-            try { await hub.SendAsync("JoinRoom", _activeRoom); } catch { }
+            try { await JoinAllRooms(); } catch { }
             _ = InvokeAsync(StateHasChanged);
         };
         hub.Closed += ex =>
@@ -393,8 +437,20 @@
         _hub = hub;
         await hub.StartAsync();
         _status = "connected";
-        await hub.SendAsync("JoinRoom", _activeRoom);
+        await JoinAllRooms();
         StateHasChanged();
+    }
+
+    private async Task JoinAllRooms()
+    {
+        if (_hub is not { State: HubConnectionState.Connected }) return;
+        foreach (var room in ChatState.Rooms)
+        {
+            if (!Session.ArchivedRooms.Contains(room.Key))
+            {
+                await _hub.SendAsync("JoinRoom", room.Key);
+            }
+        }
     }
 
     private async Task StopHub()
@@ -420,6 +476,38 @@
     }
 
     private void OnSearch(ChangeEventArgs e) => _search = e.Value?.ToString() ?? "";
+
+    private IEnumerable<ChatUser> MemberProfiles
+    {
+        get
+        {
+            var list = _activeMembers
+                .Select(ChatState.GetUser)
+                .Where(u => u is not null)
+                .Cast<ChatUser>()
+                .ToList();
+            return list
+                .OrderByDescending(u => u.Id == _me?.Id)
+                .ThenByDescending(u => IsOnline(u.Id))
+                .ThenBy(u => u.DisplayName, StringComparer.OrdinalIgnoreCase);
+        }
+    }
+
+    private bool PassesFilter(string key, ChatRoom room) => _filter switch
+    {
+        "unread" => Session.Unread.TryGetValue(key, out var c) && c > 0,
+        "groups" => room.Kind == "group",
+        "communities" => room.Kind == "community",
+        _ => true
+    };
+
+    private string EmptyText => _filter switch
+    {
+        "unread" => "No unread chats 🎉",
+        "groups" => "No group chats",
+        "communities" => "No communities",
+        _ => "No chats here"
+    };
 
     private bool MatchesSearch(string primary, string secondary)
     {
@@ -460,7 +548,6 @@
     {
         if (roomKey == _activeRoom) return;
         if (Session.ArchivedRooms.Contains(roomKey)) return;
-        var old = _activeRoom;
         _activeRoom = roomKey;
         _activeRoomInfo = ChatState.GetRoom(roomKey);
         Session.Unread[roomKey] = 0;
@@ -471,10 +558,6 @@
         {
             try
             {
-                if (ChatState.GetRoom(old) is not null)
-                {
-                    await _hub.SendAsync("LeaveRoom", old);
-                }
                 await _hub.SendAsync("JoinRoom", roomKey);
             }
             catch { }

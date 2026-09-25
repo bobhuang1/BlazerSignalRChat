@@ -192,6 +192,29 @@ body {
 }
 .tab:hover { background: var(--hover); color: var(--text); }
 .tab.active { background: #e7f3ff; color: var(--accent); }
+
+.filter-chips {
+    display: flex;
+    gap: 6px;
+    padding: 0 12px 10px;
+    overflow-x: auto;
+    scrollbar-width: none;
+}
+.filter-chips::-webkit-scrollbar { display: none; }
+.chip-btn {
+    border: none;
+    background: var(--input-bg);
+    padding: 7px 14px;
+    font-size: 12px;
+    font-weight: 600;
+    color: var(--muted);
+    cursor: pointer;
+    border-radius: 999px;
+    white-space: nowrap;
+    transition: background 0.15s ease, color 0.15s ease;
+}
+.chip-btn:hover { background: var(--hover); color: var(--text); }
+.chip-btn.active { background: var(--accent); color: #fff; }
 .badge {
     background: var(--accent);
     color: #fff;
@@ -297,8 +320,15 @@ body {
 .chat {
     flex: 1;
     display: flex;
-    flex-direction: column;
+    flex-direction: row;
     background: var(--panel);
+    min-width: 0;
+}
+
+.chat-col {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
     min-width: 0;
 }
 
@@ -314,6 +344,58 @@ body {
 .chat-sub { font-size: 12px; color: var(--muted); }
 .member-chips { margin-left: auto; display: flex; gap: 6px; }
 .chip .avatar { margin-left: -6px; border: 2px solid var(--panel); }
+
+/* ---------- right pane: member profiles ---------- */
+.chat-meta {
+    width: 280px;
+    min-width: 280px;
+    border-left: 1px solid var(--border);
+    background: var(--panel);
+    display: flex;
+    flex-direction: column;
+    overflow-y: auto;
+}
+.meta-header {
+    padding: 14px 16px 10px;
+    border-bottom: 1px solid var(--border);
+}
+.meta-title { font-weight: 700; font-size: 15px; }
+.meta-sub { font-size: 12px; color: var(--muted); }
+.meta-list { padding: 8px; display: flex; flex-direction: column; gap: 2px; }
+.mem-row {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 8px;
+    border-radius: 10px;
+}
+.mem-row:hover { background: var(--hover); }
+.mem-row .avatar { width: 44px; height: 44px; min-width: 44px; font-size: 15px; }
+.mem-body { flex: 1; min-width: 0; }
+.mem-name {
+    font-weight: 600;
+    font-size: 14px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.mem-bio {
+    font-size: 12px;
+    color: var(--muted);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.mem-status {
+    font-size: 11px;
+    color: var(--muted);
+    white-space: nowrap;
+    flex-shrink: 0;
+}
+.mem-status.live { color: var(--online); font-weight: 600; }
 
 .feed {
     flex: 1;
@@ -468,6 +550,9 @@ body {
 #blazor-error-ui .dismiss { float: right; cursor: pointer; }
 
 /* ---------- responsiveness ---------- */
+@media (max-width: 1180px) {
+    .chat-meta { display: none; }
+}
 @media (max-width: 820px) {
     .sidebar { width: 100%; min-width: 0; border-right: none; border-bottom: 1px solid var(--border); max-height: 38vh; }
     .app-body { flex-direction: column; }

@@ -33,18 +33,24 @@ Pick a user from the top-right switcher. The choice is remembered per tab
 Three panels:
 
 - **Chats** — 3 group rooms (General, Announcements, Random) with last-message
-  previews, unread badges and live member counts.
+  previews, unread badges and live member counts. Filter with the chips above
+  the list (All / Unread / Groups / Communities) and search across names and
+  previews with the search bar.
 - **Friends** — all 5 demo users with online/last-seen presence.
 - **Archived** — archive a chat with the 📦 button in its header; restore it
   with ↺.
 
 Group rooms:
 
-| Room             | Purpose       |
-|------------------|---------------|
-| General          | Chat with everyone |
-| Announcements    | Team updates  |
-| Random           | Off-topic fun |
+| Room             | Kind       | Purpose       |
+|------------------|------------|---------------|
+| General          | Group      | Chat with everyone |
+| Announcements    | Group      | Team updates  |
+| Random           | Community  | Off-topic fun |
+
+The right-hand **Members** pane lists the profiles of everyone in the active
+chat with their bio, online/last-seen status, and live presence dots (collapses
+on narrow windows).
 
 ## Features
 
