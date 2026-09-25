@@ -9,34 +9,61 @@
 <div class="messenger">
     <header class="topbar">
         <div class="brand">
-            <div class="brand-logo">💬</div>
+            <svg class="brand-logo" width="34" height="34" viewBox="0 0 34 34" aria-hidden="true">
+                <defs>
+                    <linearGradient id="brandGrad" x1="0" y1="0" x2="1" y2="1">
+                        <stop offset="0" stop-color="#00c6ff" />
+                        <stop offset="1" stop-color="#0072ff" />
+                    </linearGradient>
+                </defs>
+                <rect x="1.5" y="1.5" width="31" height="31" rx="9" fill="url(#brandGrad)" />
+                <path d="M6 6h22a4 4 0 0 1 4 4v10.5a4 4 0 0 1-4 4H17.5L11 28v-3.5H6a4 4 0 0 1-4-4V10a4 4 0 0 1 4-4z" fill="#fff" />
+                <circle cx="12" cy="15.5" r="2" fill="url(#brandGrad)" />
+                <circle cx="17" cy="15.5" r="2" fill="url(#brandGrad)" />
+                <circle cx="22" cy="15.5" r="2" fill="url(#brandGrad)" />
+            </svg>
             <div class="brand-text">
                 <div class="brand-name">BlazerSignalRChat</div>
                 <div class="brand-tagline">Blazor Server · SignalR demo</div>
             </div>
         </div>
 
-        <div class="conn-pill @StatusCss" title="@StatusText">
-            <span class="conn-dot"></span>
-            <span>@StatusText</span>
-        </div>
+        <div class="topbar-actions">
+            <div class="header-icons">
+                <button class="icon-btn" title="Video call (demo)">🎥</button>
+                <button class="icon-btn" title="Voice call (demo)">📞</button>
+            </div>
 
-        <div class="user-switcher">
-            <span class="switcher-label">Chatting as</span>
-            <label class="switcher-control" style="--hue:@(_me?.Hue ?? 0)">
-                <span class="avatar">@(_me is null ? "?" : InitialOf(_me.DisplayName))</span>
-                <select value="@_me?.Id" @onchange="OnUserChanged">
-                    @foreach (var u in ChatState.Users)
-                    {
-                        <option value="@u.Id">@u.DisplayName</option>
-                    }
-                </select>
-            </label>
+            <div class="conn-pill @StatusCss" title="@StatusText">
+                <span class="conn-dot"></span>
+                <span>@StatusText</span>
+            </div>
+
+            <div class="user-switcher">
+                <span class="switcher-label">Chatting as</span>
+                <label class="switcher-control" style="--hue:@(_me?.Hue ?? 0)">
+                    <span class="avatar xs">@(_me is null ? "?" : InitialOf(_me.DisplayName))</span>
+                    <select value="@_me?.Id" @onchange="OnUserChanged">
+                        @foreach (var u in ChatState.Users)
+                        {
+                            <option value="@u.Id">@u.DisplayName</option>
+                        }
+                    </select>
+                </label>
+            </div>
         </div>
     </header>
 
     <div class="app-body">
         <aside class="sidebar">
+            <div class="search-wrap">
+                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true">
+                    <circle cx="7" cy="7" r="5.25" stroke="#65676b" stroke-width="1.5" />
+                    <path d="M11 11l3 3" stroke="#65676b" stroke-width="1.5" stroke-linecap="round" />
+                </svg>
+                <input class="search-input" placeholder="Search Messenger" value="@_search" @oninput="OnSearch" />
+            </div>
+
             <nav class="tabs">
                 <button class="tab @(_tab == "chats" ? "active" : "")" @onclick="() => ShowTab(0)">
                     Chats
@@ -54,10 +81,9 @@
                 {
                     @foreach (var room in ChatState.Rooms)
                     {
-                        if (!Session.ArchivedRooms.Contains(room.Key))
-                        {
-                            @RoomRow(room)
-                        }
+                        if (Session.ArchivedRooms.Contains(room.Key)) { continue; }
+                        if (!MatchesSearch(room.Title, room.Description)) { continue; }
+                        @RoomRow(room)
                     }
                     if (ChatState.Rooms.All(r => Session.ArchivedRooms.Contains(r.Key)))
                     {
@@ -68,20 +94,30 @@
                 {
                     @foreach (var u in ChatState.Users)
                     {
+                        if (!MatchesSearch(u.DisplayName, u.Bio)) { continue; }
                         <div class="friend-row" @onclick="() => SwitchUser(u.Id)">
-                            <div class="avatar" style="--hue:@u.Hue">@InitialOf(u.DisplayName)</div>
-                            <div class="friend-meta">
-                                <div class="friend-name">@u.DisplayName
-                                    @if (u.Id == _me?.Id)
+                            <div class="avatar has-dot" style="--hue:@u.Hue">
+                                @InitialOf(u.DisplayName)
+                                <i class="presence-dot @(IsOnline(u.Id) ? "on" : "")"></i>
+                            </div>
+                            <div class="room-body">
+                                <div class="room-top">
+                                    <div class="room-title">
+                                        @u.DisplayName
+                                        @if (u.Id == _me?.Id)
+                                        {
+                                            <span class="you-tag">you</span>
+                                        }
+                                    </div>
+                                    <div class="room-time @(IsOnline(u.Id) ? "live" : "")">@ChatState.LastSeenText(u.Id)</div>
+                                </div>
+                                <div class="room-bottom">
+                                    <div class="room-desc">@u.Bio</div>
+                                    @if (IsOnline(u.Id))
                                     {
-                                        <span class="you-tag">you</span>
+                                        <div class="live-dot"></div>
                                     }
                                 </div>
-                                <div class="friend-bio">@u.Bio</div>
-                            </div>
-                            <div class="presence @(IsOnline(u.Id) ? "online" : "")">
-                                <span class="presence-dot"></span>
-                                <span class="presence-text">@ChatState.LastSeenText(u.Id)</span>
                             </div>
                         </div>
                     }
@@ -90,17 +126,20 @@
                 {
                     @foreach (var room in ChatState.Rooms)
                     {
-                        if (Session.ArchivedRooms.Contains(room.Key))
-                        {
-                            <div class="room-row">
-                                <div class="avatar" style="--hue:@room.Hue">@room.Title[0]</div>
-                                <div class="room-meta">
+                        if (!Session.ArchivedRooms.Contains(room.Key)) { continue; }
+                        if (!MatchesSearch(room.Title, room.Description)) { continue; }
+                        <div class="room-row">
+                            <div class="avatar" style="--hue:@room.Hue">@room.Title[0]</div>
+                            <div class="room-body">
+                                <div class="room-top">
                                     <div class="room-title">@room.Title</div>
+                                </div>
+                                <div class="room-bottom">
                                     <div class="room-desc">@room.Description</div>
                                 </div>
-                                <button class="icon-btn" title="Restore" @onclick="() => ToggleArchive(room.Key)">↺</button>
                             </div>
-                        }
+                            <button class="icon-btn" title="Restore" @onclick="() => ToggleArchive(room.Key)">↺</button>
+                        </div>
                     }
                     if (!ChatState.Rooms.Any(r => Session.ArchivedRooms.Contains(r.Key)))
                     {
@@ -120,13 +159,9 @@
             else
             {
                 <header class="chat-header">
-                    <div class="avatar" style="--hue:@_activeRoomInfo.Hue">@_activeRoomInfo.Title[0]</div>
                     <div class="chat-title-wrap">
                         <div class="chat-title">@_activeRoomInfo.Title</div>
-                        <div class="chat-sub">
-                            @_activeRoomInfo.Description
-                            · @_activeMembers.Count member(s), @_activeOnline.Length online
-                        </div>
+                        <div class="chat-sub">@_activeRoomInfo.Description · @_activeMembers.Count member(s), @_activeOnline.Length online</div>
                     </div>
                     <div class="member-chips">
                         @foreach (var pid in _activeMembers)
@@ -134,7 +169,7 @@
                             var u = ChatState.GetUser(pid);
                             if (u is null) { continue; }
                             <span class="chip" title="@u.DisplayName">
-                                <div class="avatar sm" style="--hue:@u.Hue">
+                                <div class="avatar sm has-dot" style="--hue:@u.Hue">
                                     <i class="presence-dot @(IsOnline(u.Id) ? "on" : "")"></i>@InitialOf(u.DisplayName)
                                 </div>
                             </span>
@@ -146,6 +181,7 @@
                 </header>
 
                 <div class="feed" @ref="_feed">
+                    <div class="date-divider">Today</div>
                     @foreach (var sys in _systemLines)
                     {
                         <div class="sys-line">@sys</div>
@@ -156,26 +192,26 @@
                         <div class="msg-row @(mine ? "mine" : "theirs")">
                             @if (!mine)
                             {
-                                <div class="avatar" style="--hue:@m.User.Hue">@InitialOf(m.User.DisplayName)</div>
+                                <div class="avatar sm msg-avatar" style="--hue:@m.User.Hue">@InitialOf(m.User.DisplayName)</div>
                             }
                             <div class="msg">
                                 @if (!mine)
                                 {
                                     <div class="msg-name">@m.User.DisplayName <span class="msg-time">@m.SentAt.ToLocalTime().ToString("HH:mm")</span></div>
                                 }
-                                else
+                                <div class="bubble">@m.Text</div>
+                                @if (mine)
                                 {
                                     <div class="msg-time right">@m.SentAt.ToLocalTime().ToString("HH:mm")</div>
                                 }
-                                <div class="bubble">@m.Text</div>
                             </div>
                         </div>
                     }
                     @if (_typing.Any())
                     {
                         <div class="typing-line">
-                            <span class="typing-dots"><i></i><i></i><i></i></span>
-                            @TypingLabel
+                            <span class="typing-bubble"><i></i><i></i><i></i></span>
+                            <span class="typing-label">@TypingLabel</span>
                         </div>
                     }
                 </div>
@@ -189,7 +225,9 @@
                            @onkeydown="OnKeyDown"
                            @onblur="StopTyping" />
                     <button class="send-btn" disabled="@(string.IsNullOrWhiteSpace(_input) || _hub?.State != HubConnectionState.Connected)" @onclick="SendMessage">
-                        <span>➤</span>
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true">
+                            <path d="M3.4 20.4l17.45-7.48a1 1 0 0 0 0-1.84L3.4 3.6a.993.993 0 0 0-1.39.91L2 9.12c0 .5.37.93.87.99L17 12 2.87 13.88c-.5.07-.87.5-.87 1l.01 4.61c0 .71.73 1.2 1.39.91z" />
+                        </svg>
                     </button>
                 </footer>
             }
@@ -202,6 +240,7 @@
 
     private HubConnection? _hub;
     private string _tab = "chats";
+    private string _search = "";
     private string _activeRoom = "general";
     private ChatUser? _me;
     private ChatRoom? _activeRoomInfo;
@@ -380,6 +419,15 @@
         await StopHub();
     }
 
+    private void OnSearch(ChangeEventArgs e) => _search = e.Value?.ToString() ?? "";
+
+    private bool MatchesSearch(string primary, string secondary)
+    {
+        if (string.IsNullOrWhiteSpace(_search)) return true;
+        return primary.Contains(_search, StringComparison.OrdinalIgnoreCase)
+            || secondary.Contains(_search, StringComparison.OrdinalIgnoreCase);
+    }
+
     private async Task OnUserChanged(ChangeEventArgs e)
     {
         var id = e.Value?.ToString();
@@ -505,30 +553,38 @@
     {
         <div class="room-row @(room.Key == _activeRoom ? "active" : "")" @onclick="() => SelectRoom(room.Key)">
             <div class="avatar" style="--hue:@room.Hue">@room.Title[0]</div>
-            <div class="room-meta">
-                <div class="room-title">
-                    @room.Title
-                    @if (Session.Unread.TryGetValue(room.Key, out var unread) && unread > 0)
+            <div class="room-body">
+                <div class="room-top">
+                    <div class="room-title">
+                        @room.Title
+                        @if (Session.Unread.TryGetValue(room.Key, out var unread) && unread > 0)
+                        {
+                            <span class="badge dot">@unread</span>
+                        }
+                    </div>
+                    <div class="room-time">
+                        @if (ChatState.LastMessage(room.Key) is { } last)
+                        {
+                            <text>@last.SentAt.ToLocalTime().ToString("HH:mm")</text>
+                        }
+                    </div>
+                </div>
+                <div class="room-bottom">
+                    <div class="room-desc">
+                        @if (ChatState.LastMessage(room.Key) is { } preview)
+                        {
+                            <text>@preview.User.DisplayName: @preview.Text</text>
+                        }
+                        else
+                        {
+                            <text>No messages yet</text>
+                        }
+                    </div>
+                    @if (room.Key == _activeRoom && _activeOnline.Length > 0)
                     {
-                        <span class="badge">@unread</span>
+                        <div class="online-count">● @_activeOnline.Length</div>
                     }
                 </div>
-                <div class="room-desc">
-                    @if (ChatState.LastMessage(room.Key) is { } last)
-                    {
-                        <text>@last.User.DisplayName: @last.Text</text>
-                    }
-                    else
-                    {
-                        <text>No messages yet</text>
-                    }
-                </div>
-            </div>
-            <div class="room-meta-right">
-                @if (_activeOnline.Length > 0 && room.Key == _activeRoom)
-                {
-                    <div class="online-count">● @_activeOnline.Length</div>
-                }
             </div>
         </div>;
     };
