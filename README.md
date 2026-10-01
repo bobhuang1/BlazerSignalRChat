@@ -91,3 +91,8 @@ BlazerSignalRChat/
 Open 5 tabs and pick Alice, Bob, Carol, Dave and Eve. Watch the Friends panel
 switch to "online" and the room member counts climb as each tab connects.
 React to a message in one tab and the pill appears in all of them.
+
+
+## License
+
+This project is free software, released under the **GNU General Public License v3.0**. You may redistribute and/or modify it under those terms; see [LICENSE.md](LICENSE.md) for the full text.
