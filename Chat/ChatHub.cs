@@ -7,8 +7,15 @@ public sealed class ChatHub : Hub
     private static readonly TimeSpan TypingTimeout = TimeSpan.FromSeconds(4);
 
     private readonly ChatState _state;
+    private readonly IHubContext<ChatHub> _hubContext;
+    private readonly ILogger<ChatHub> _logger;
 
-    public ChatHub(ChatState state) => _state = state;
+    public ChatHub(ChatState state, IHubContext<ChatHub> hubContext, ILogger<ChatHub> logger)
+    {
+        _state = state;
+        _hubContext = hubContext;
+        _logger = logger;
+    }
 
     private ChatUser? CurrentUser =>
         _state.GetUser(Context.GetHttpContext()?.Request.Query["user"].ToString());
@@ -101,14 +108,26 @@ public sealed class ChatHub : Hub
 
         if (isTyping)
         {
-            // Auto-clear the typing indicator if the user walks away.
+            // Auto-clear the typing indicator if the user walks away. Hub instances only live
+            // for one invocation, so the delayed broadcast goes through IHubContext and only
+            // captures singletons.
             var connectionId = Context.ConnectionId;
+            var state = _state;
+            var hubContext = _hubContext;
+            var logger = _logger;
             _ = Task.Run(async () =>
             {
-                await Task.Delay(TypingTimeout);
-                if (_state.SetTyping(connectionId, user.Id, roomKey, false))
+                try
                 {
-                    await Clients.Group(roomKey).SendAsync("TypingChanged", roomKey, _state.RoomTypingIds(roomKey));
+                    await Task.Delay(TypingTimeout);
+                    if (state.SetTyping(connectionId, user.Id, roomKey, false))
+                    {
+                        await hubContext.Clients.Group(roomKey).SendAsync("TypingChanged", roomKey, state.RoomTypingIds(roomKey));
+                    }
+                }
+                catch (Exception ex)
+                {
+                    logger.LogWarning(ex, "Typing auto-clear failed for room {Room}", roomKey);
                 }
             });
         }

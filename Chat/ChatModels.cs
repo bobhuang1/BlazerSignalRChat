@@ -6,9 +6,11 @@ public sealed record ChatRoom(string Key, string Title, string Description, int 
 
 public sealed record ChatMessage(long Id, string RoomKey, ChatUser User, string Text, DateTimeOffset SentAt)
 {
-    /// <summary>emoji -> user ids that reacted with it. Setter needed so SignalR's
-    /// JSON deserializer can populate it on the receiving client.</summary>
-    public Dictionary<string, HashSet<string>> Reactions { get; set; } = new();
+    /// <summary>emoji -> user ids that reacted with it. Never mutated: a reaction toggle
+    /// stores a new message with a new map, so a message that SignalR is serializing (or a
+    /// component is rendering) never changes underneath it. <c>init</c> lets the JSON
+    /// deserializer populate it on the receiving client.</summary>
+    public IReadOnlyDictionary<string, string[]> Reactions { get; init; } = new Dictionary<string, string[]>();
 }
 
 public sealed record RoomSnapshot(List<ChatMessage> History, List<ChatUser> Participants);

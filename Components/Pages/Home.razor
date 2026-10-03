@@ -622,103 +622,107 @@
             .WithAutomaticReconnect()
             .Build();
 
+        // Hub callbacks arrive on the SignalR client's thread. Every handler applies its
+        // changes inside InvokeAsync, on the renderer's sync context, so a render never
+        // enumerates a collection while a callback is changing it.
         hub.On<string, List<ChatMessage>, List<ChatUser>>("JoinedRoom", (room, history, participants) =>
-        {
-            if (room == _activeRoom)
+            InvokeAsync(() =>
             {
-                _messages = history;
-                _activeMembers = participants.Select(p => p.Id).ToList();
-                _typing.Clear();
-                _systemLines.Clear();
-            }
-            foreach (var m in history)
-            {
-                if (m.Reactions.Count > 0)
+                if (room == _activeRoom)
                 {
-                    _reactions[m.Id] = m.Reactions.ToDictionary(
-                        kv => kv.Key,
-                        kv => new HashSet<string>(kv.Value, StringComparer.Ordinal));
+                    _messages = history;
+                    _activeMembers = participants.Select(p => p.Id).ToList();
+                    _typing.Clear();
+                    _systemLines.Clear();
                 }
-            }
-            _ = InvokeAsync(StateHasChanged);
-        });
+                foreach (var m in history)
+                {
+                    if (m.Reactions.Count > 0)
+                    {
+                        _reactions[m.Id] = m.Reactions.ToDictionary(
+                            kv => kv.Key,
+                            kv => new HashSet<string>(kv.Value, StringComparer.Ordinal));
+                    }
+                }
+                StateHasChanged();
+            }));
         hub.On<ChatMessage>("ReceiveMessage", msg =>
-        {
-            if (Session.ArchivedRooms.Contains(msg.RoomKey)) return;
-            if (msg.RoomKey == _activeRoom)
+            InvokeAsync(() =>
             {
-                if (_messages.All(m => m.Id != msg.Id))
+                if (Session.ArchivedRooms.Contains(msg.RoomKey)) return;
+                if (msg.RoomKey == _activeRoom)
                 {
-                    _messages.Add(msg);
+                    if (_messages.All(m => m.Id != msg.Id))
+                    {
+                        _messages.Add(msg);
+                    }
+                    _typing.Remove(msg.User.Id);
                 }
-                _typing.Remove(msg.User.Id);
-            }
-            else
-            {
-                Session.Unread.TryGetValue(msg.RoomKey, out var c);
-                Session.Unread[msg.RoomKey] = c + 1;
-            }
-            _ = InvokeAsync(StateHasChanged);
-        });
+                else
+                {
+                    Session.Unread.TryGetValue(msg.RoomKey, out var c);
+                    Session.Unread[msg.RoomKey] = c + 1;
+                }
+                StateHasChanged();
+            }));
         hub.On<string, string>("SystemEvent", (room, line) =>
-        {
-            if (room == _activeRoom)
+            InvokeAsync(() =>
             {
-                _systemLines.Add(line);
-                if (_systemLines.Count > 20) _systemLines.RemoveAt(0);
-            }
-            _ = InvokeAsync(StateHasChanged);
-        });
+                if (room == _activeRoom)
+                {
+                    _systemLines.Add(line);
+                    if (_systemLines.Count > 20) _systemLines.RemoveAt(0);
+                }
+                StateHasChanged();
+            }));
         hub.On<string, string[]>("TypingChanged", (room, ids) =>
-        {
-            if (room == _activeRoom)
+            InvokeAsync(() =>
             {
-                _typing = ids.Where(id => id != _me!.Id).ToHashSet();
-            }
-            _ = InvokeAsync(StateHasChanged);
-        });
-        hub.On<string[]>("OnlineUsersChanged", ids =>
-        {
-            _ = InvokeAsync(StateHasChanged);
-        });
+                if (room == _activeRoom)
+                {
+                    _typing = ids.Where(id => id != _me!.Id).ToHashSet();
+                }
+                StateHasChanged();
+            }));
+        hub.On<string[]>("OnlineUsersChanged", ids => InvokeAsync(StateHasChanged));
         hub.On<string, string[]>("RoomPresenceChanged", (room, ids) =>
-        {
-            if (room == _activeRoom)
+            InvokeAsync(() =>
             {
-                _activeOnline = ids;
-            }
-            _ = InvokeAsync(StateHasChanged);
-        });
+                if (room == _activeRoom)
+                {
+                    _activeOnline = ids;
+                }
+                StateHasChanged();
+            }));
         hub.On<long, string, string[]>("ReactionChanged", (msgId, emoji, userIds) =>
-        {
-            if (!_reactions.TryGetValue(msgId, out var dict))
+            InvokeAsync(() =>
             {
-                dict = new Dictionary<string, HashSet<string>>();
-                _reactions[msgId] = dict;
-            }
-            if (userIds.Length == 0) dict.Remove(emoji);
-            else dict[emoji] = userIds.ToHashSet(StringComparer.Ordinal);
-            _ = InvokeAsync(StateHasChanged);
-        });
+                if (!_reactions.TryGetValue(msgId, out var dict))
+                {
+                    dict = new Dictionary<string, HashSet<string>>();
+                    _reactions[msgId] = dict;
+                }
+                if (userIds.Length == 0) dict.Remove(emoji);
+                else dict[emoji] = userIds.ToHashSet(StringComparer.Ordinal);
+                StateHasChanged();
+            }));
 
-        hub.Reconnecting += ex =>
+        hub.Reconnecting += ex => InvokeAsync(() =>
         {
             _status = "reconnecting";
-            _ = InvokeAsync(StateHasChanged);
-            return Task.CompletedTask;
-        };
+            StateHasChanged();
+        });
         hub.Reconnected += async ctx =>
         {
-            _status = "connected";
+            await InvokeAsync(() => _status = "connected");
             try { await JoinAllRooms(); } catch { }
-            _ = InvokeAsync(StateHasChanged);
+            await InvokeAsync(StateHasChanged);
         };
-        hub.Closed += ex =>
+        hub.Closed += ex => InvokeAsync(() =>
         {
             _status = _status == "reconnecting" ? "reconnecting" : "failed";
-            _ = InvokeAsync(StateHasChanged);
-            return Task.CompletedTask;
-        };
+            StateHasChanged();
+        });
 
         _hub = hub;
         await hub.StartAsync();

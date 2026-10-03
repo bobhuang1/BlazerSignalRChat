@@ -22,8 +22,10 @@ public sealed class ChatState
     private readonly ConcurrentDictionary<string, DateTimeOffset> _lastSeen = new();          // userId -> last active
 
     private long _nextId;
+
+    // One lock for all message state: the per-room lists, _msgRoom and reactions.
+    // Every reader copies what it needs while holding it.
     private readonly object _historyLock = new();
-    private readonly object _reactionLock = new();
     private readonly Dictionary<long, string> _msgRoom = new();          // messageId -> roomKey
 
     public ChatState()
@@ -39,11 +41,21 @@ public sealed class ChatState
 
     public ChatRoom? GetRoom(string? key) => key is null ? null : _rooms.TryGetValue(key, out var r) ? r : null;
 
-    public ChatMessage? LastMessage(string roomKey) =>
-        _messages.TryGetValue(roomKey, out var list) && list.Count > 0 ? list[^1] : null;
+    public ChatMessage? LastMessage(string roomKey)
+    {
+        lock (_historyLock)
+        {
+            return _messages.TryGetValue(roomKey, out var list) && list.Count > 0 ? list[^1] : null;
+        }
+    }
 
-    public List<ChatMessage> History(string roomKey) =>
-        _messages.TryGetValue(roomKey, out var list) ? new List<ChatMessage>(list) : new();
+    public List<ChatMessage> History(string roomKey)
+    {
+        lock (_historyLock)
+        {
+            return _messages.TryGetValue(roomKey, out var list) ? new List<ChatMessage>(list) : new();
+        }
+    }
 
     public List<ChatUser> Participants(string roomKey) =>
         History(roomKey).Select(m => m.User).DistinctBy(u => u.Id).ToList();
@@ -128,22 +140,26 @@ public sealed class ChatState
     /// resulting reacting-user ids for that emoji (empty array = reaction removed).</summary>
     public (string RoomKey, string[] UserIds)? ToggleReaction(long messageId, string userId, string emoji)
     {
-        lock (_reactionLock)
+        lock (_historyLock)
         {
             if (!_msgRoom.TryGetValue(messageId, out var roomKey)) return null;
-            var msg = History(roomKey).FirstOrDefault(m => m.Id == messageId);
-            if (msg is null) return null;
+            if (!_messages.TryGetValue(roomKey, out var list)) return null;
+            var index = list.FindIndex(m => m.Id == messageId);
+            if (index < 0) return null;
+            var msg = list[index];
 
-            if (!msg.Reactions.TryGetValue(emoji, out var set))
-            {
-                set = new HashSet<string>(StringComparer.Ordinal);
-                msg.Reactions[emoji] = set;
-            }
-
+            var set = msg.Reactions.TryGetValue(emoji, out var current)
+                ? new HashSet<string>(current, StringComparer.Ordinal)
+                : new HashSet<string>(StringComparer.Ordinal);
             if (!set.Remove(userId)) set.Add(userId);
-            if (set.Count == 0) msg.Reactions.Remove(emoji);
-
             var ids = set.OrderBy(x => x, StringComparer.Ordinal).ToArray();
+
+            // Replace the message instead of mutating it (see ChatMessage.Reactions).
+            var reactions = new Dictionary<string, string[]>(msg.Reactions, StringComparer.Ordinal);
+            if (ids.Length == 0) reactions.Remove(emoji);
+            else reactions[emoji] = ids;
+            list[index] = msg with { Reactions = reactions };
+
             return (roomKey, ids);
         }
     }

@@ -93,6 +93,13 @@ switch to "online" and the room member counts climb as each tab connects.
 React to a message in one tab and the pill appears in all of them.
 
 
+## Security notes
+
+This is a demo with no login. The hub trusts the `?user=` value on its URL, so
+anyone who can reach `/chat` can post as any demo user, and all state is held in
+memory. Do not deploy it publicly as-is: add authentication and take the user
+from the authenticated principal (`Context.User`) instead of the query string.
+
 ## License
 
 This project is free software, released under the **GNU General Public License v3.0**. You may redistribute and/or modify it under those terms; see [LICENSE.md](LICENSE.md) for the full text.
