@@ -9,6 +9,12 @@ Every browser tab is its own demo user (`sessionStorage` identity), so opening
 a few tabs gives a live multi-user chat with no database and no login — all
 state is in-memory and resets on restart.
 
+![The chat UI: inbox, conversation with message bubbles, and the chat info pane](docs/chat.png)
+
+<sub>Captured from the app running locally (`dotnet run`). There is no hosted
+demo: this is Blazor **Server**, so it needs a running host and a SignalR
+circuit. Clone it and run it to see it live.</sub>
+
 ## Features
 
 **Layout**
