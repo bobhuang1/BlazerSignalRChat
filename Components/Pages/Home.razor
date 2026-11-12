@@ -187,6 +187,10 @@
 
                 <div class="feed" @ref="_feed">
                     @{ var lastDay = (DateTime?)null; }
+                    @if (_notice is not null)
+                    {
+                        <div class="sys-line" role="status">@_notice</div>
+                    }
                     @foreach (var sys in _systemLines)
                     {
                         <div class="sys-line">@sys</div>
@@ -523,6 +527,7 @@
     private List<ChatMessage> _messages = new();
     private bool _hasMore;
     private bool _loadingEarlier;
+    private string? _notice;
     private List<string> _systemLines = new();
     private HashSet<string> _typing = new();
     private List<string> _activeMembers = new();
@@ -880,6 +885,11 @@
     {
         if (roomKey == _activeRoom) return;
         if (Session.ArchivedRooms.Contains(roomKey)) return;
+        var prevRoom = _activeRoom;
+        var prevInfo = _activeRoomInfo;
+        var prevMessages = _messages;
+        var prevHasMore = _hasMore;
+        var prevMembers = _activeMembers;
         _activeRoom = roomKey;
         _activeRoomInfo = ChatState.GetRoom(roomKey);
         Session.Unread[roomKey] = 0;
@@ -891,9 +901,32 @@
         {
             try
             {
-                await _hub.SendAsync("JoinRoom", roomKey, true);
+                var accepted = await _hub.InvokeAsync<bool>("JoinRoom", roomKey, true);
+                if (!accepted && _activeRoom == roomKey)
+                {
+                    // Rate limited: go back to the room that was showing instead of leaving a blank one.
+                    _activeRoom = prevRoom;
+                    _activeRoomInfo = prevInfo;
+                    _messages = prevMessages;
+                    _hasMore = prevHasMore;
+                    _activeMembers = prevMembers;
+                    ShowNotice();
+                }
             }
             catch { }
+        }
+    }
+
+    private async void ShowNotice()
+    {
+        var text = "Slow down a little and try again.";
+        _notice = text;
+        StateHasChanged();
+        await Task.Delay(3000);
+        if (_notice == text)
+        {
+            _notice = null;
+            await InvokeAsync(StateHasChanged);
         }
     }
 
@@ -907,6 +940,12 @@
             var page = await _hub.InvokeAsync<HistoryPage>("LoadEarlier", room, _messages[0].Id);
             if (room != _activeRoom) return;   // the user switched rooms while waiting
             var known = _messages.Select(m => m.Id).ToHashSet();
+            if (page.Throttled)
+            {
+                // Keep the button; the older messages are still there.
+                ShowNotice();
+                return;
+            }
             _messages.InsertRange(0, page.Messages.Where(m => !known.Contains(m.Id)));
             _hasMore = page.HasMore;
             foreach (var m in page.Messages)

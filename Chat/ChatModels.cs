@@ -16,4 +16,4 @@ public sealed record ChatMessage(long Id, string RoomKey, ChatUser User, string 
 public sealed record RoomSnapshot(List<ChatMessage> History, List<ChatUser> Participants, bool HasMore = false);
 
 /// <summary>One page of history, oldest first. <c>HasMore</c> is true when older messages remain.</summary>
-public sealed record HistoryPage(List<ChatMessage> Messages, bool HasMore);
+public sealed record HistoryPage(List<ChatMessage> Messages, bool HasMore, bool Throttled = false);

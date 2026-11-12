@@ -43,11 +43,12 @@ public sealed class ChatHub : Hub
 
     /// <summary>Subscribes the caller to a room. History is only sent when the client asks for it
     /// (the room it is showing), so a tab does not pull every room's history on connect.</summary>
-    public async Task JoinRoom(string roomKey, bool withHistory)
+    /// <returns>False when the call was refused (rate limited or unknown room), so the client can keep its state.</returns>
+    public async Task<bool> JoinRoom(string roomKey, bool withHistory)
     {
         var user = CurrentUser;
-        if (user is null || _state.GetRoom(roomKey) is null) return;
-        if (!Allowed(HubAction.Join)) return;
+        if (user is null || _state.GetRoom(roomKey) is null) return false;
+        if (!Allowed(HubAction.Join)) return false;
 
         var firstJoin = _state.AddConnectionRoom(Context.ConnectionId, roomKey);
         await Groups.AddToGroupAsync(Context.ConnectionId, roomKey);
@@ -61,15 +62,21 @@ public sealed class ChatHub : Hub
             await Clients.GroupExcept(roomKey, Context.ConnectionId).SendAsync("SystemEvent", roomKey, $"{user.DisplayName} joined");
             await Clients.Group(roomKey).SendAsync("RoomPresenceChanged", roomKey, _state.RoomOnline(roomKey));
         }
+        return true;
     }
 
     /// <summary>Returns the page of messages just before <paramref name="beforeId"/>. Rate limited, and the
     /// page size is fixed by the server.</summary>
     public Task<HistoryPage> LoadEarlier(string roomKey, long beforeId)
     {
-        if (CurrentUser is null || _state.GetRoom(roomKey) is null || !Allowed(HubAction.History))
+        if (CurrentUser is null || _state.GetRoom(roomKey) is null)
         {
             return Task.FromResult(new HistoryPage(new(), false));
+        }
+        if (!Allowed(HubAction.History))
+        {
+            // Not the same as "no more history": the client keeps its button and tells the user to slow down.
+            return Task.FromResult(new HistoryPage(new(), true, Throttled: true));
         }
         return Task.FromResult(_state.PageBefore(roomKey, beforeId, ChatLimits.HistoryPageSize));
     }
