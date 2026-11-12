@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Check out
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up .NET 10
+        uses: actions/setup-dotnet@0f4a354dd5547a28c70b7853dbd95d5b67886e73 # v6.1.0
+        with:
+          dotnet-version: 10.0.x
+          cache: true
+          cache-dependency-path: |
+            BlazerSignalRChat.csproj
+            tests/**/*.csproj
+
+      - name: Restore
+        run: dotnet restore BlazerSignalRChat.sln
+
+      - name: Build
+        run: dotnet build BlazerSignalRChat.sln --configuration Release --no-restore
+
+      - name: Test
+        run: dotnet test BlazerSignalRChat.sln --configuration Release --no-build --verbosity normal
