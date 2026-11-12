@@ -528,6 +528,7 @@
     private bool _hasMore;
     private bool _loadingEarlier;
     private string? _notice;
+    private string[]? _onlineUsers;
     private List<string> _systemLines = new();
     private HashSet<string> _typing = new();
     private List<string> _activeMembers = new();
@@ -645,6 +646,7 @@
                 if (room == _activeRoom && participants.Count > 0)
                 {
                     _messages = history;
+                    _reactions.Clear();   // drop entries for the room that was showing before
                     _hasMore = hasMore;
                     _activeMembers = participants.Select(p => p.Id).ToList();
                     _typing.Clear();
@@ -671,6 +673,7 @@
                     if (_messages.All(m => m.Id != msg.Id))
                     {
                         _messages.Add(msg);
+                        TrimMessages();
                     }
                     _typing.Remove(msg.User.Id);
                     // Always follow your own message; only follow others while already at the bottom.
@@ -703,7 +706,14 @@
                 }
                 StateHasChanged();
             }));
-        hub.On<string[]>("OnlineUsersChanged", ids => InvokeAsync(StateHasChanged));
+        hub.On<string[]>("OnlineUsersChanged", ids =>
+            InvokeAsync(() =>
+            {
+                // Presence is only shown for who is online, so skip the re-render when the list is unchanged.
+                if (_onlineUsers is not null && _onlineUsers.AsSpan().SequenceEqual(ids)) return;
+                _onlineUsers = ids;
+                StateHasChanged();
+            }));
         hub.On<string, string[]>("RoomPresenceChanged", (room, ids) =>
             InvokeAsync(() =>
             {
@@ -716,6 +726,8 @@
         hub.On<long, string, string[]>("ReactionChanged", (msgId, emoji, userIds) =>
             InvokeAsync(() =>
             {
+                // Group messages cover every joined room; only keep reactions for messages on screen.
+                if (!_messages.Any(m => m.Id == msgId)) return;
                 if (!_reactions.TryGetValue(msgId, out var dict))
                 {
                     dict = new Dictionary<string, HashSet<string>>();
@@ -915,6 +927,16 @@
             }
             catch { }
         }
+    }
+
+    /// <summary>Keeps the active room's list within what the server keeps, and drops reactions of evicted messages.</summary>
+    private void TrimMessages()
+    {
+        var extra = _messages.Count - ChatLimits.MaxHistoryPerRoom;
+        if (extra <= 0) return;
+        for (var i = 0; i < extra; i++) _reactions.Remove(_messages[i].Id);
+        _messages.RemoveRange(0, extra);
+        _hasMore = true;
     }
 
     private async void ShowNotice()

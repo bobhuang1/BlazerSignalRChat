@@ -31,11 +31,39 @@ public class ThrottledHubCallTests
         public override void Abort() { }
     }
 
-    private static (ChatHub Hub, HubRateLimiter Limiter) NewHub()
+    private static (ChatHub Hub, HubRateLimiter Limiter, ChatState State) NewHubWithState()
     {
         var limiter = new HubRateLimiter();
-        var hub = new ChatHub(new ChatState(), limiter, null!) { Context = new FakeContext("alice") };
+        var state = new ChatState();
+        var hub = new ChatHub(state, limiter, null!) { Context = new FakeContext("alice") };
+        return (hub, limiter, state);
+    }
+
+    private static (ChatHub Hub, HubRateLimiter Limiter) NewHub()
+    {
+        var (hub, limiter, _) = NewHubWithState();
         return (hub, limiter);
+    }
+
+    [Fact]
+    public async Task SendMessage_from_a_connection_that_never_joined_is_ignored()
+    {
+        var (hub, _, state) = NewHubWithState();
+        var before = state.History("general").Count;
+
+        await hub.SendMessage("general", "hello");
+
+        Assert.Equal(before, state.History("general").Count);
+    }
+
+    [Fact]
+    public async Task LeaveRoom_without_joining_does_nothing()
+    {
+        var (hub, limiter, _) = NewHubWithState();
+
+        await hub.LeaveRoom("general");   // would throw on the null Clients if it tried to broadcast
+
+        Assert.True(limiter.TryAcquire("c1", HubAction.Join));
     }
 
     [Fact]

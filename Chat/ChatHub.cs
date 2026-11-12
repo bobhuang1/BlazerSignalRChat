@@ -84,7 +84,7 @@ public sealed class ChatHub : Hub
     public async Task LeaveRoom(string roomKey)
     {
         var user = CurrentUser;
-        if (user is null) return;
+        if (user is null || !_state.IsInRoom(Context.ConnectionId, roomKey)) return;
         if (!Allowed(HubAction.Join)) return;
 
         _state.RemoveConnectionRoom(Context.ConnectionId, roomKey);
@@ -98,6 +98,7 @@ public sealed class ChatHub : Hub
         var user = CurrentUser;
         if (user is null || _state.GetRoom(roomKey) is null) return;
         if (string.IsNullOrWhiteSpace(text)) return;
+        if (!_state.IsInRoom(Context.ConnectionId, roomKey)) return;
         if (!Allowed(HubAction.Send)) return;
 
         text = text.Trim();

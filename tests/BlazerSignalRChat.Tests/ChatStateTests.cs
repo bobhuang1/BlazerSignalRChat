@@ -168,3 +168,45 @@ public class ChatStateTests
         Assert.Same(state.Users, state.Users);
     }
 }
+
+public class TypingAndMembershipTests
+{
+    [Fact]
+    public void One_tab_stopping_does_not_clear_the_other_tabs_typing()
+    {
+        var state = new ChatState();
+        Assert.True(state.SetTyping("c1", "alice", "general", true));
+        Assert.False(state.SetTyping("c2", "alice", "general", true));
+
+        Assert.False(state.SetTyping("c1", "alice", "general", false));
+        Assert.Equal(new[] { "alice" }, state.RoomTypingIds("general"));
+
+        Assert.True(state.SetTyping("c2", "alice", "general", false));
+        Assert.Empty(state.RoomTypingIds("general"));
+    }
+
+    [Fact]
+    public void Disconnect_clears_only_that_connections_typing()
+    {
+        var state = new ChatState();
+        state.TryRegisterConnection("c1", "alice", 10, out _);
+        state.TryRegisterConnection("c2", "alice", 10, out _);
+        state.SetTyping("c1", "alice", "general", true);
+        state.SetTyping("c2", "alice", "general", true);
+
+        state.UnregisterConnection("c1", out _, out _, out _);
+
+        Assert.Equal(new[] { "alice" }, state.RoomTypingIds("general"));
+    }
+
+    [Fact]
+    public void IsInRoom_follows_join_and_leave()
+    {
+        var state = new ChatState();
+        Assert.False(state.IsInRoom("c1", "general"));
+        state.AddConnectionRoom("c1", "general");
+        Assert.True(state.IsInRoom("c1", "general"));
+        state.RemoveConnectionRoom("c1", "general");
+        Assert.False(state.IsInRoom("c1", "general"));
+    }
+}

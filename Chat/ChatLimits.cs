@@ -15,6 +15,9 @@ public static class ChatLimits
     /// The server still keeps up to 500 per room.</summary>
     public const int HistoryPageSize = 50;
 
+    /// <summary>Messages kept per room on the server, and the most a client keeps in memory for its active room.</summary>
+    public const int MaxHistoryPerRoom = 500;
+
     /// <summary>Largest hub message the server accepts. A 2000-character message is well under this.</summary>
     public const long MaxReceiveMessageSize = 16 * 1024;
 }

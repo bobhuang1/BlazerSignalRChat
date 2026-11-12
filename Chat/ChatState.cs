@@ -9,8 +9,6 @@ namespace BlazerSignalRChat.Chat;
 /// </summary>
 public sealed class ChatState
 {
-    private const long MaxHistoryPerRoom = 500;
-
     private readonly ConcurrentDictionary<string, ChatUser> _users = new();
     private readonly ConcurrentDictionary<string, ChatRoom> _rooms = new();
     private readonly ConcurrentDictionary<string, List<ChatMessage>> _messages = new();
@@ -20,7 +18,7 @@ public sealed class ChatState
     private readonly object _presenceLock = new();
     private readonly ConcurrentDictionary<string, HashSet<string>> _connRooms = new();        // connectionId -> roomKeys
     private readonly ConcurrentDictionary<string, string> _typingConnRoom = new();            // connectionId -> roomKey
-    private readonly ConcurrentDictionary<string, HashSet<string>> _roomTyping = new();       // roomKey -> userIds
+    private readonly ConcurrentDictionary<string, Dictionary<string, string>> _roomTyping = new(); // roomKey -> connectionId -> userId
     private readonly ConcurrentDictionary<string, DateTimeOffset> _lastSeen = new();          // userId -> last active
 
     private long _nextId;
@@ -180,13 +178,7 @@ public sealed class ChatState
         rooms = _connRooms.TryRemove(connectionId, out var set) ? set.ToArray() : Array.Empty<string>();
 
         _typingConnRoom.TryRemove(connectionId, out var typedRoom);
-        if (typedRoom is not null)
-        {
-            lock (_roomTyping)
-            {
-                if (_roomTyping.TryGetValue(typedRoom, out var s)) s.Remove(userId!);
-            }
-        }
+        if (typedRoom is not null) SetTypingCore(connectionId, userId ?? "", typedRoom, false);
     }
 
     /// <summary>Adds a room to a connection's subscriptions. Returns true when it is a first-time join.</summary>
@@ -196,6 +188,15 @@ public sealed class ChatState
         lock (set)
         {
             return set.Add(roomKey);
+        }
+    }
+
+    public bool IsInRoom(string connectionId, string roomKey)
+    {
+        if (!_connRooms.TryGetValue(connectionId, out var set)) return false;
+        lock (set)
+        {
+            return set.Contains(roomKey);
         }
     }
 
@@ -223,7 +224,7 @@ public sealed class ChatState
                 _roomUserMessages[roomKey] = counts = new Dictionary<string, int>(StringComparer.Ordinal);
             }
             counts[user.Id] = counts.GetValueOrDefault(user.Id) + 1;
-            if (list.Count > MaxHistoryPerRoom)
+            if (list.Count > ChatLimits.MaxHistoryPerRoom)
             {
                 var oldest = list[0];
                 _msgRoom.Remove(oldest.Id);
@@ -267,27 +268,50 @@ public sealed class ChatState
         }
     }
 
+    /// <summary>Marks a connection as typing (or not) in a room. Typing is tracked per connection, so a user's
+    /// second tab stopping does not clear the first tab's indicator. Returns true when the set of typing
+    /// users in the room changed.</summary>
     public bool SetTyping(string connectionId, string userId, string roomKey, bool isTyping)
     {
         if (isTyping)
         {
+            var changed = false;
             if (_typingConnRoom.TryRemove(connectionId, out var oldRoom) && oldRoom != roomKey)
             {
-                DestroyTyping(oldRoom, userId);
+                changed = SetTypingCore(connectionId, userId, oldRoom, false);
             }
             _typingConnRoom[connectionId] = roomKey;
-            return GrantTyping(roomKey, userId);
+            return SetTypingCore(connectionId, userId, roomKey, true) | changed;
         }
 
         _typingConnRoom.TryRemove(connectionId, out _);
-        return DestroyTyping(roomKey, userId);
+        return SetTypingCore(connectionId, userId, roomKey, false);
     }
 
     public string[] RoomTypingIds(string roomKey)
     {
         lock (_roomTyping)
         {
-            return _roomTyping.TryGetValue(roomKey, out var set) ? set.OrderBy(x => x, StringComparer.Ordinal).ToArray() : Array.Empty<string>();
+            return TypingUserIds(roomKey);
+        }
+    }
+
+    // Caller holds the _roomTyping lock.
+    private string[] TypingUserIds(string roomKey) =>
+        _roomTyping.TryGetValue(roomKey, out var map)
+            ? map.Values.Distinct(StringComparer.Ordinal).OrderBy(x => x, StringComparer.Ordinal).ToArray()
+            : Array.Empty<string>();
+
+    private bool SetTypingCore(string connectionId, string userId, string roomKey, bool isTyping)
+    {
+        if (string.IsNullOrEmpty(userId)) return false;
+        lock (_roomTyping)
+        {
+            var before = TypingUserIds(roomKey);
+            var map = _roomTyping.GetOrAdd(roomKey, _ => new Dictionary<string, string>(StringComparer.Ordinal));
+            if (isTyping) map[connectionId] = userId;
+            else map.Remove(connectionId);
+            return !before.AsSpan().SequenceEqual(TypingUserIds(roomKey));
         }
     }
 
@@ -302,28 +326,6 @@ public sealed class ChatState
         {
             return members.Where(_userConnCount.ContainsKey).OrderBy(x => x, StringComparer.Ordinal).ToArray();
         }
-    }
-
-    private bool GrantTyping(string roomKey, string userId)
-    {
-        lock (_roomTyping)
-        {
-            var set = _roomTyping.GetOrAdd(roomKey, _ => new HashSet<string>(StringComparer.Ordinal));
-            return set.Add(userId);
-        }
-    }
-
-    private bool DestroyTyping(string roomKey, string userId)
-    {
-        if (string.IsNullOrEmpty(userId)) return false;
-        lock (_roomTyping)
-        {
-            if (_roomTyping.TryGetValue(roomKey, out var set))
-            {
-                return set.Remove(userId);
-            }
-        }
-        return false;
     }
 
     private void Seed()

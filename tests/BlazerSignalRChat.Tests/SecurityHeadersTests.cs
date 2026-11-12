@@ -21,7 +21,7 @@ public class SecurityHeadersTests
         var nonce = (string)ctx.Items[SecurityHeaders.NonceItemKey]!;
         Assert.False(string.IsNullOrEmpty(nonce));
         Assert.Equal(SecurityHeaders.BuildPolicy(nonce), h["Content-Security-Policy"]);
-        Assert.DoesNotContain("unsafe-inline", Assert.Single(h["Content-Security-Policy"]).Split("script-src")[1].Split(';')[0]);
+        Assert.DoesNotContain("unsafe-inline", Assert.Single(h["Content-Security-Policy"])!.Split("script-src")[1].Split(';')[0]);
         Assert.Contains("frame-ancestors 'none'", h["Content-Security-Policy"].ToString());
         Assert.Contains("script-src 'self'", h["Content-Security-Policy"].ToString());
         Assert.Equal("nosniff", h["X-Content-Type-Options"]);
