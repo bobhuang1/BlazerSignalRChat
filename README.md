@@ -110,6 +110,12 @@ Do not expose it on a network or deploy it publicly as-is: add authentication an
 take the user from the authenticated principal (`Context.User`) instead of the
 query string, then set `AllowedHosts` to the real host names.
 
+## Tests
+
+`dotnet test` runs the unit tests for the chat state and the hub rate limiter.
+
+The hub also limits abuse: each connection is rate limited per action, the number of simultaneous connections is capped, a message holds a limited number of distinct reactions, and incoming hub messages are capped at 16 KB (see `Chat/ChatLimits.cs`).
+
 ## License
 
 This project is free software, released under the **GNU General Public License v3.0**. You may redistribute and/or modify it under those terms; see [LICENSE.md](LICENSE.md) for the full text.

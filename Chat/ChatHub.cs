@@ -4,18 +4,18 @@ namespace BlazerSignalRChat.Chat;
 
 public sealed class ChatHub : Hub
 {
-    private static readonly TimeSpan TypingTimeout = TimeSpan.FromSeconds(4);
-
     private readonly ChatState _state;
-    private readonly IHubContext<ChatHub> _hubContext;
-    private readonly ILogger<ChatHub> _logger;
+    private readonly HubRateLimiter _limiter;
+    private readonly TypingTimeouts _typingTimeouts;
 
-    public ChatHub(ChatState state, IHubContext<ChatHub> hubContext, ILogger<ChatHub> logger)
+    public ChatHub(ChatState state, HubRateLimiter limiter, TypingTimeouts typingTimeouts)
     {
         _state = state;
-        _hubContext = hubContext;
-        _logger = logger;
+        _limiter = limiter;
+        _typingTimeouts = typingTimeouts;
     }
+
+    private bool Allowed(HubAction action) => _limiter.TryAcquire(Context.ConnectionId, action);
 
     private ChatUser? CurrentUser =>
         _state.GetUser(Context.GetHttpContext()?.Request.Query["user"].ToString());
@@ -28,20 +28,31 @@ public sealed class ChatHub : Hub
             Context.Abort();
             return;
         }
-        _state.RegisterConnection(Context.ConnectionId, user.Id);
-        await Clients.All.SendAsync("OnlineUsersChanged", _state.OnlineUsers);
+        if (!_state.TryRegisterConnection(Context.ConnectionId, user.Id, ChatLimits.MaxConnections, out var cameOnline))
+        {
+            Context.Abort();
+            return;
+        }
+        // Only the first tab of a user changes who is online, so other tabs stay quiet.
+        if (cameOnline)
+        {
+            await Clients.All.SendAsync("OnlineUsersChanged", _state.OnlineUsers);
+        }
         await base.OnConnectedAsync();
     }
 
-    public async Task JoinRoom(string roomKey)
+    /// <summary>Subscribes the caller to a room. History is only sent when the client asks for it
+    /// (the room it is showing), so a tab does not pull every room's history on connect.</summary>
+    public async Task JoinRoom(string roomKey, bool withHistory)
     {
         var user = CurrentUser;
         if (user is null || _state.GetRoom(roomKey) is null) return;
+        if (!Allowed(HubAction.Join)) return;
 
         var firstJoin = _state.AddConnectionRoom(Context.ConnectionId, roomKey);
         await Groups.AddToGroupAsync(Context.ConnectionId, roomKey);
 
-        var snapshot = _state.SnapshotFor(roomKey);
+        var snapshot = withHistory ? _state.SnapshotFor(roomKey) : new RoomSnapshot(new(), new());
         await Clients.Caller.SendAsync("JoinedRoom", roomKey, snapshot.History, snapshot.Participants);
         if (firstJoin)
         {
@@ -56,6 +67,7 @@ public sealed class ChatHub : Hub
     {
         var user = CurrentUser;
         if (user is null) return;
+        if (!Allowed(HubAction.Join)) return;
 
         _state.RemoveConnectionRoom(Context.ConnectionId, roomKey);
         await Groups.RemoveFromGroupAsync(Context.ConnectionId, roomKey);
@@ -68,13 +80,15 @@ public sealed class ChatHub : Hub
         var user = CurrentUser;
         if (user is null || _state.GetRoom(roomKey) is null) return;
         if (string.IsNullOrWhiteSpace(text)) return;
+        if (!Allowed(HubAction.Send)) return;
 
         text = text.Trim();
-        if (text.Length > 2000) text = text[..2000];
+        if (text.Length > ChatLimits.MaxMessageLength) text = text[..ChatLimits.MaxMessageLength];
 
         var msg = _state.AddMessage(roomKey, user, text);
         await Clients.Group(roomKey).SendAsync("ReceiveMessage", msg);
 
+        _typingTimeouts.Cancel(Context.ConnectionId);
         if (_state.SetTyping(Context.ConnectionId, user.Id, roomKey, false))
         {
             await Clients.Group(roomKey).SendAsync("TypingChanged", roomKey, _state.RoomTypingIds(roomKey));
@@ -87,7 +101,8 @@ public sealed class ChatHub : Hub
         var user = CurrentUser;
         if (user is null) return;
         emoji = (emoji ?? "").Trim();
-        if (emoji.Length is 0 or > 16) return;
+        if (emoji.Length is 0 or > ChatLimits.MaxEmojiLength) return;
+        if (!Allowed(HubAction.React)) return;
 
         var result = _state.ToggleReaction(messageId, user.Id, emoji);
         if (result is null) return;
@@ -100,42 +115,23 @@ public sealed class ChatHub : Hub
     {
         var user = CurrentUser;
         if (user is null || _state.GetRoom(roomKey) is null) return;
+        if (!Allowed(HubAction.Typing)) return;
 
         if (_state.SetTyping(Context.ConnectionId, user.Id, roomKey, isTyping))
         {
             await Clients.Group(roomKey).SendAsync("TypingChanged", roomKey, _state.RoomTypingIds(roomKey));
         }
 
-        if (isTyping)
-        {
-            // Auto-clear the typing indicator if the user walks away. Hub instances only live
-            // for one invocation, so the delayed broadcast goes through IHubContext and only
-            // captures singletons.
-            var connectionId = Context.ConnectionId;
-            var state = _state;
-            var hubContext = _hubContext;
-            var logger = _logger;
-            _ = Task.Run(async () =>
-            {
-                try
-                {
-                    await Task.Delay(TypingTimeout);
-                    if (state.SetTyping(connectionId, user.Id, roomKey, false))
-                    {
-                        await hubContext.Clients.Group(roomKey).SendAsync("TypingChanged", roomKey, state.RoomTypingIds(roomKey));
-                    }
-                }
-                catch (Exception ex)
-                {
-                    logger.LogWarning(ex, "Typing auto-clear failed for room {Room}", roomKey);
-                }
-            });
-        }
+        // Auto-clear the typing indicator if the user walks away; each keystroke restarts the timer.
+        if (isTyping) _typingTimeouts.Restart(Context.ConnectionId, user.Id, roomKey);
+        else _typingTimeouts.Cancel(Context.ConnectionId);
     }
 
     public override async Task OnDisconnectedAsync(Exception? exception)
     {
-        _state.UnregisterConnection(Context.ConnectionId, out var userId, out var rooms);
+        _typingTimeouts.Cancel(Context.ConnectionId);
+        _limiter.Remove(Context.ConnectionId);
+        _state.UnregisterConnection(Context.ConnectionId, out var userId, out var rooms, out var wentOffline);
 
         foreach (var room in rooms)
         {
@@ -147,7 +143,10 @@ public sealed class ChatHub : Hub
             await Clients.Group(room).SendAsync("RoomPresenceChanged", room, _state.RoomOnline(room));
         }
 
-        await Clients.All.SendAsync("OnlineUsersChanged", _state.OnlineUsers);
+        if (wentOffline)
+        {
+            await Clients.All.SendAsync("OnlineUsersChanged", _state.OnlineUsers);
+        }
         await base.OnDisconnectedAsync(exception);
     }
 }

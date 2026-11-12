@@ -16,6 +16,8 @@ public sealed class ChatState
     private readonly ConcurrentDictionary<string, List<ChatMessage>> _messages = new();
 
     private readonly ConcurrentDictionary<string, string> _connUser = new();                  // connectionId -> userId
+    private readonly Dictionary<string, int> _userConnCount = new(StringComparer.Ordinal);    // userId -> open connections
+    private readonly object _presenceLock = new();
     private readonly ConcurrentDictionary<string, HashSet<string>> _connRooms = new();        // connectionId -> roomKeys
     private readonly ConcurrentDictionary<string, string> _typingConnRoom = new();            // connectionId -> roomKey
     private readonly ConcurrentDictionary<string, HashSet<string>> _roomTyping = new();       // roomKey -> userIds
@@ -27,15 +29,20 @@ public sealed class ChatState
     // Every reader copies what it needs while holding it.
     private readonly object _historyLock = new();
     private readonly Dictionary<long, string> _msgRoom = new();          // messageId -> roomKey
+    private readonly Dictionary<string, Dictionary<string, int>> _roomUserMessages = new();  // roomKey -> userId -> messages in history
+
+    // The seed data never changes, so sort once instead of on every render.
+    private IReadOnlyList<ChatUser> _usersSorted = Array.Empty<ChatUser>();
+    private IReadOnlyList<ChatRoom> _roomsSorted = Array.Empty<ChatRoom>();
 
     public ChatState()
     {
         Seed();
     }
 
-    public IReadOnlyList<ChatUser> Users => _users.Values.OrderBy(u => u.Id).ToList();
+    public IReadOnlyList<ChatUser> Users => _usersSorted;
 
-    public IReadOnlyList<ChatRoom> Rooms => _rooms.Values.OrderBy(r => r.Key).ToList();
+    public IReadOnlyList<ChatRoom> Rooms => _roomsSorted;
 
     public ChatUser? GetUser(string? id) => id is null ? null : _users.TryGetValue(id, out var u) ? u : null;
 
@@ -57,12 +64,41 @@ public sealed class ChatState
         }
     }
 
-    public List<ChatUser> Participants(string roomKey) =>
-        History(roomKey).Select(m => m.User).DistinctBy(u => u.Id).ToList();
+    public List<ChatUser> Participants(string roomKey)
+    {
+        lock (_historyLock)
+        {
+            var result = new List<ChatUser>();
+            if (!_messages.TryGetValue(roomKey, out var list)) return result;
+            var seen = new HashSet<string>(StringComparer.Ordinal);
+            foreach (var m in list)
+            {
+                if (seen.Add(m.User.Id)) result.Add(m.User);
+            }
+            return result;
+        }
+    }
 
-    public string[] OnlineUsers => _connUser.Values.Distinct().OrderBy(x => x, StringComparer.Ordinal).ToArray();
+    public int ConnectionCount => _connUser.Count;
 
-    public bool IsOnline(string userId) => _connUser.Values.Contains(userId, StringComparer.Ordinal);
+    public string[] OnlineUsers
+    {
+        get
+        {
+            lock (_presenceLock)
+            {
+                return _userConnCount.Keys.OrderBy(x => x, StringComparer.Ordinal).ToArray();
+            }
+        }
+    }
+
+    public bool IsOnline(string userId)
+    {
+        lock (_presenceLock)
+        {
+            return _userConnCount.ContainsKey(userId);
+        }
+    }
 
     public string LastSeenText(string userId)
     {
@@ -75,15 +111,47 @@ public sealed class ChatState
              : $"last seen {(int)ago.TotalDays}d ago";
     }
 
-    public void RegisterConnection(string connectionId, string userId)
+    /// <summary>Registers a connection. Returns false (and registers nothing) when the connection
+    /// cap is reached. <paramref name="userCameOnline"/> is true when this is the user's first
+    /// open connection, so callers only announce real presence changes.</summary>
+    public bool TryRegisterConnection(string connectionId, string userId, int maxConnections, out bool userCameOnline)
     {
-        _connUser[connectionId] = userId;
+        userCameOnline = false;
+        lock (_presenceLock)
+        {
+            if (!_connUser.ContainsKey(connectionId))
+            {
+                if (_connUser.Count >= maxConnections) return false;
+                _connUser[connectionId] = userId;
+                _userConnCount.TryGetValue(userId, out var n);
+                _userConnCount[userId] = n + 1;
+                userCameOnline = n == 0;
+            }
+        }
         _lastSeen[userId] = DateTimeOffset.Now;
+        return true;
     }
 
-    public void UnregisterConnection(string connectionId, out string? userId, out string[] rooms)
+    /// <summary>Removes a connection. <paramref name="userWentOffline"/> is true when it was the user's last one.</summary>
+    public void UnregisterConnection(string connectionId, out string? userId, out string[] rooms, out bool userWentOffline)
     {
-        _connUser.TryRemove(connectionId, out var uid);
+        userWentOffline = false;
+        string? uid;
+        lock (_presenceLock)
+        {
+            if (_connUser.TryRemove(connectionId, out uid) && _userConnCount.TryGetValue(uid, out var n))
+            {
+                if (n <= 1)
+                {
+                    _userConnCount.Remove(uid);
+                    userWentOffline = true;
+                }
+                else
+                {
+                    _userConnCount[uid] = n - 1;
+                }
+            }
+        }
         userId = uid;
         rooms = _connRooms.TryRemove(connectionId, out var set) ? set.ToArray() : Array.Empty<string>();
 
@@ -126,10 +194,18 @@ public sealed class ChatState
             var list = _messages.GetOrAdd(roomKey, _ => new List<ChatMessage>());
             list.Add(msg);
             _msgRoom[msg.Id] = roomKey;
+            if (!_roomUserMessages.TryGetValue(roomKey, out var counts))
+            {
+                _roomUserMessages[roomKey] = counts = new Dictionary<string, int>(StringComparer.Ordinal);
+            }
+            counts[user.Id] = counts.GetValueOrDefault(user.Id) + 1;
             if (list.Count > MaxHistoryPerRoom)
             {
-                _msgRoom.Remove(list[0].Id);
+                var oldest = list[0];
+                _msgRoom.Remove(oldest.Id);
                 list.RemoveAt(0);
+                if (counts[oldest.User.Id] <= 1) counts.Remove(oldest.User.Id);
+                else counts[oldest.User.Id]--;
             }
         }
         _lastSeen[user.Id] = DateTimeOffset.Now;
@@ -147,6 +223,9 @@ public sealed class ChatState
             var index = list.FindIndex(m => m.Id == messageId);
             if (index < 0) return null;
             var msg = list[index];
+
+            // Cap distinct reactions per message so one message cannot grow without bound.
+            if (!msg.Reactions.ContainsKey(emoji) && msg.Reactions.Count >= ChatLimits.MaxReactionKindsPerMessage) return null;
 
             var set = msg.Reactions.TryGetValue(emoji, out var current)
                 ? new HashSet<string>(current, StringComparer.Ordinal)
@@ -190,9 +269,15 @@ public sealed class ChatState
 
     public string[] RoomOnline(string roomKey)
     {
-        var online = _connUser.Values.Distinct().ToHashSet(StringComparer.Ordinal);
-        var members = Participants(roomKey).Select(u => u.Id).ToHashSet(StringComparer.Ordinal);
-        return members.Where(online.Contains).OrderBy(x => x, StringComparer.Ordinal).ToArray();
+        string[] members;
+        lock (_historyLock)
+        {
+            members = _roomUserMessages.TryGetValue(roomKey, out var counts) ? counts.Keys.ToArray() : Array.Empty<string>();
+        }
+        lock (_presenceLock)
+        {
+            return members.Where(_userConnCount.ContainsKey).OrderBy(x => x, StringComparer.Ordinal).ToArray();
+        }
     }
 
     private bool GrantTyping(string roomKey, string userId)
@@ -236,6 +321,8 @@ public sealed class ChatState
             new ChatRoom("random", "Random", "Off-topic fun", 4, "community"),
         };
         foreach (var r in rooms) _rooms[r.Key] = r;
+        _usersSorted = users.OrderBy(u => u.Id).ToList();
+        _roomsSorted = rooms.OrderBy(r => r.Key).ToList();
 
         var now = DateTimeOffset.Now;
         AddMessage("general", _users["alice"], "Hey everyone! Welcome to the General room 👋");

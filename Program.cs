@@ -6,8 +6,10 @@ var builder = WebApplication.CreateBuilder(args);
 
 builder.Services.AddRazorComponents()
     .AddInteractiveServerComponents();
-builder.Services.AddSignalR();
+builder.Services.AddSignalR(o => o.MaximumReceiveMessageSize = ChatLimits.MaxReceiveMessageSize);
 builder.Services.AddSingleton<ChatState>();
+builder.Services.AddSingleton<HubRateLimiter>();
+builder.Services.AddSingleton<TypingTimeouts>();
 builder.Services.AddScoped<SessionState>();
 
 var app = builder.Build();
