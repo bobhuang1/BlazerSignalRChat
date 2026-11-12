@@ -922,3 +922,5 @@ button { font-family: inherit; }
     .msg-row { max-width: 92%; }
     .chat { border-right: none; }
 }
+.load-earlier { display: block; margin: 4px auto 10px; }
+.load-earlier:disabled { opacity: .6; cursor: default; }

@@ -53,7 +53,7 @@ public sealed class ChatHub : Hub
         await Groups.AddToGroupAsync(Context.ConnectionId, roomKey);
 
         var snapshot = withHistory ? _state.SnapshotFor(roomKey) : new RoomSnapshot(new(), new());
-        await Clients.Caller.SendAsync("JoinedRoom", roomKey, snapshot.History, snapshot.Participants);
+        await Clients.Caller.SendAsync("JoinedRoom", roomKey, snapshot.History, snapshot.Participants, snapshot.HasMore);
         if (firstJoin)
         {
             // Keep the feed quiet on tab switches: the "joined" line is only
@@ -61,6 +61,17 @@ public sealed class ChatHub : Hub
             await Clients.GroupExcept(roomKey, Context.ConnectionId).SendAsync("SystemEvent", roomKey, $"{user.DisplayName} joined");
             await Clients.Group(roomKey).SendAsync("RoomPresenceChanged", roomKey, _state.RoomOnline(roomKey));
         }
+    }
+
+    /// <summary>Returns the page of messages just before <paramref name="beforeId"/>. Rate limited, and the
+    /// page size is fixed by the server.</summary>
+    public Task<HistoryPage> LoadEarlier(string roomKey, long beforeId)
+    {
+        if (CurrentUser is null || _state.GetRoom(roomKey) is null || !Allowed(HubAction.History))
+        {
+            return Task.FromResult(new HistoryPage(new(), false));
+        }
+        return Task.FromResult(_state.PageBefore(roomKey, beforeId, ChatLimits.HistoryPageSize));
     }
 
     public async Task LeaveRoom(string roomKey)
@@ -155,5 +166,11 @@ public static class ChatStateExtensions
 {
     /// <summary>Snapshot of a room for a freshly joining caller.</summary>
     public static RoomSnapshot SnapshotFor(this ChatState state, string roomKey) =>
-        new(state.History(roomKey), state.Participants(roomKey));
+        BuildSnapshot(state, roomKey);
+
+    private static RoomSnapshot BuildSnapshot(ChatState state, string roomKey)
+    {
+        var page = state.RecentHistory(roomKey);
+        return new RoomSnapshot(page.Messages, state.Participants(roomKey), page.HasMore);
+    }
 }

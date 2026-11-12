@@ -64,6 +64,30 @@ public sealed class ChatState
         }
     }
 
+    /// <summary>The newest <paramref name="limit"/> messages of a room, oldest first.</summary>
+    public HistoryPage RecentHistory(string roomKey, int limit = ChatLimits.HistoryPageSize) =>
+        PageBefore(roomKey, long.MaxValue, limit);
+
+    /// <summary>Up to <paramref name="limit"/> messages older than <paramref name="beforeId"/>, oldest first.
+    /// The limit is clamped to 1..<see cref="ChatLimits.HistoryPageSize"/> so a client cannot ask for the whole store.</summary>
+    public HistoryPage PageBefore(string roomKey, long beforeId, int limit = ChatLimits.HistoryPageSize)
+    {
+        limit = Math.Clamp(limit, 1, ChatLimits.HistoryPageSize);
+        lock (_historyLock)
+        {
+            if (!_messages.TryGetValue(roomKey, out var list)) return new HistoryPage(new(), false);
+            // Ids only grow, so the list is sorted by id; find the first message at or after beforeId.
+            int lo = 0, hi = list.Count;
+            while (lo < hi)
+            {
+                var mid = (lo + hi) / 2;
+                if (list[mid].Id < beforeId) lo = mid + 1; else hi = mid;
+            }
+            var start = Math.Max(0, lo - limit);
+            return new HistoryPage(list.GetRange(start, lo - start), start > 0);
+        }
+    }
+
     public List<ChatUser> Participants(string roomKey)
     {
         lock (_historyLock)

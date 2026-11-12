@@ -11,6 +11,10 @@ public static class ChatLimits
     public const int MaxEmojiLength = 16;
     public const int MaxReactionKindsPerMessage = 24;
 
+    /// <summary>Messages sent to a client when it joins a room, and the size of each "load earlier" page.
+    /// The server still keeps up to 500 per room.</summary>
+    public const int HistoryPageSize = 50;
+
     /// <summary>Largest hub message the server accepts. A 2000-character message is well under this.</summary>
     public const long MaxReceiveMessageSize = 16 * 1024;
 }
@@ -21,6 +25,7 @@ public enum HubAction
     Send,
     React,
     Typing,
+    History,
 }
 
 /// <summary>Classic token bucket: holds up to <c>capacity</c> tokens and refills at a steady rate.</summary>
@@ -66,6 +71,7 @@ public sealed class HubRateLimiter
         [HubAction.Send] = (10, 2),
         [HubAction.React] = (10, 3),
         [HubAction.Typing] = (6, 2),
+        [HubAction.History] = (5, 1),
     };
 
     private readonly TimeProvider _time;

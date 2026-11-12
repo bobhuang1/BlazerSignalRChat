@@ -191,6 +191,10 @@
                     {
                         <div class="sys-line">@sys</div>
                     }
+                    @if (_hasMore)
+                    {
+                        <button class="chip-btn load-earlier" disabled="@_loadingEarlier" @onclick="LoadEarlier">Load earlier messages</button>
+                    }
                     @foreach (var m in _messages)
                     {
                         var day = m.SentAt.ToLocalTime().Date;
@@ -517,6 +521,8 @@
     private ChatUser? _me;
     private ChatRoom? _activeRoomInfo;
     private List<ChatMessage> _messages = new();
+    private bool _hasMore;
+    private bool _loadingEarlier;
     private List<string> _systemLines = new();
     private HashSet<string> _typing = new();
     private List<string> _activeMembers = new();
@@ -627,13 +633,14 @@
         // Hub callbacks arrive on the SignalR client's thread. Every handler applies its
         // changes inside InvokeAsync, on the renderer's sync context, so a render never
         // enumerates a collection while a callback is changing it.
-        hub.On<string, List<ChatMessage>, List<ChatUser>>("JoinedRoom", (room, history, participants) =>
+        hub.On<string, List<ChatMessage>, List<ChatUser>, bool>("JoinedRoom", (room, history, participants, hasMore) =>
             InvokeAsync(() =>
             {
                 // A join without history (a room that is not on screen) arrives with no participants.
                 if (room == _activeRoom && participants.Count > 0)
                 {
                     _messages = history;
+                    _hasMore = hasMore;
                     _activeMembers = participants.Select(p => p.Id).ToList();
                     _typing.Clear();
                     _systemLines.Clear();
@@ -848,6 +855,7 @@
         Session.CurrentUserId = id!;
         Session.Unread.Clear();
         _messages = new();
+        _hasMore = false;
         _typing.Clear();
         _systemLines.Clear();
         _reactions.Clear();
@@ -876,6 +884,7 @@
         _activeRoomInfo = ChatState.GetRoom(roomKey);
         Session.Unread[roomKey] = 0;
         _messages = new();
+        _hasMore = false;
         _typing.Clear();
         _systemLines.Clear();
         if (_hub is { State: HubConnectionState.Connected })
@@ -886,6 +895,32 @@
             }
             catch { }
         }
+    }
+
+    private async Task LoadEarlier()
+    {
+        if (_loadingEarlier || _messages.Count == 0 || _hub is not { State: HubConnectionState.Connected }) return;
+        var room = _activeRoom;
+        _loadingEarlier = true;
+        try
+        {
+            var page = await _hub.InvokeAsync<HistoryPage>("LoadEarlier", room, _messages[0].Id);
+            if (room != _activeRoom) return;   // the user switched rooms while waiting
+            var known = _messages.Select(m => m.Id).ToHashSet();
+            _messages.InsertRange(0, page.Messages.Where(m => !known.Contains(m.Id)));
+            _hasMore = page.HasMore;
+            foreach (var m in page.Messages)
+            {
+                if (m.Reactions.Count > 0)
+                {
+                    _reactions[m.Id] = m.Reactions.ToDictionary(
+                        kv => kv.Key,
+                        kv => new HashSet<string>(kv.Value, StringComparer.Ordinal));
+                }
+            }
+        }
+        catch { }
+        finally { _loadingEarlier = false; }
     }
 
     private async Task ToggleArchive(string? roomKey)
@@ -902,6 +937,7 @@
             if (roomKey == _activeRoom)
             {
                 _messages = new();
+                _hasMore = false;
                 _typing.Clear();
             }
         }
