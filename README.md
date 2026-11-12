@@ -101,10 +101,14 @@ React to a message in one tab and the pill appears in all of them.
 
 ## Security notes
 
-This is a demo with no login. The hub trusts the `?user=` value on its URL, so
+This is a local demo with no login. The hub trusts the `?user=` value on its URL, so
 anyone who can reach `/chat` can post as any demo user, and all state is held in
-memory. Do not deploy it publicly as-is: add authentication and take the user
-from the authenticated principal (`Context.User`) instead of the query string.
+memory. To keep that safe by default the app only listens on `localhost`
+(`Urls` in `appsettings.json` and `Properties/launchSettings.json`) and
+`AllowedHosts` is `localhost`, so requests for other host names are rejected.
+Do not expose it on a network or deploy it publicly as-is: add authentication and
+take the user from the authenticated principal (`Context.User`) instead of the
+query string, then set `AllowedHosts` to the real host names.
 
 ## License
 
