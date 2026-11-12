@@ -525,6 +525,8 @@
     private string _status = "connecting";
     private DateTimeOffset _lastTypeSentAt;
     private ElementReference _feed;
+    private enum ScrollRequest { None, IfAtBottom, Force }
+    private ScrollRequest _scroll = ScrollRequest.None;
 
     private readonly Dictionary<long, Dictionary<string, HashSet<string>>> _reactions = new();
     private long? _reactFor;
@@ -628,12 +630,14 @@
         hub.On<string, List<ChatMessage>, List<ChatUser>>("JoinedRoom", (room, history, participants) =>
             InvokeAsync(() =>
             {
-                if (room == _activeRoom)
+                // A join without history (a room that is not on screen) arrives with no participants.
+                if (room == _activeRoom && participants.Count > 0)
                 {
                     _messages = history;
                     _activeMembers = participants.Select(p => p.Id).ToList();
                     _typing.Clear();
                     _systemLines.Clear();
+                    _scroll = ScrollRequest.Force;
                 }
                 foreach (var m in history)
                 {
@@ -657,6 +661,9 @@
                         _messages.Add(msg);
                     }
                     _typing.Remove(msg.User.Id);
+                    // Always follow your own message; only follow others while already at the bottom.
+                    var own = msg.User.Id == _me?.Id;
+                    if (own || _scroll == ScrollRequest.None) _scroll = own ? ScrollRequest.Force : ScrollRequest.IfAtBottom;
                 }
                 else
                 {
@@ -738,7 +745,8 @@
         {
             if (!Session.ArchivedRooms.Contains(room.Key))
             {
-                await _hub.SendAsync("JoinRoom", room.Key);
+                // Only the room on screen needs its history; the others just subscribe.
+                await _hub.SendAsync("JoinRoom", room.Key, room.Key == _activeRoom);
             }
         }
     }
@@ -754,12 +762,17 @@
 
     protected override async Task OnAfterRenderAsync(bool firstRender)
     {
-        if (_status == "connected")
+        if (_scroll != ScrollRequest.None && _status == "connected")
         {
-            await JS.InvokeVoidAsync("chatScroll", _feed);
+            var force = _scroll == ScrollRequest.Force;
+            _scroll = ScrollRequest.None;
+            await JS.InvokeVoidAsync("chatScroll", _feed, force);
         }
-        _closerRef ??= DotNetObjectReference.Create(this);
-        await JS.InvokeVoidAsync("chatBindCloser", _closerRef, ".emoji-pop, .react-bar", ".emoji-trigger, .react-trigger");
+        if (firstRender)
+        {
+            _closerRef ??= DotNetObjectReference.Create(this);
+            await JS.InvokeVoidAsync("chatBindCloser", _closerRef, ".emoji-pop, .react-bar", ".emoji-trigger, .react-trigger");
+        }
     }
 
     [JSInvokable]
@@ -869,7 +882,7 @@
         {
             try
             {
-                await _hub.SendAsync("JoinRoom", roomKey);
+                await _hub.SendAsync("JoinRoom", roomKey, true);
             }
             catch { }
         }
@@ -984,13 +997,14 @@
     // Razor-local helpers reused in markup lambdas.
     private RenderFragment RoomRow(ChatRoom room) => __builder =>
     {
+        var lastMessage = ChatState.LastMessage(room.Key);
         <div class="room-row @(room.Key == _activeRoom ? "active" : "")" @onclick="() => SelectRoom(room.Key)">
             <div class="avatar" style="--hue:@room.Hue">@room.Title[0]</div>
             <div class="room-body">
                 <div class="room-top">
                     <div class="room-title">@room.Title</div>
                     <div class="room-time">
-                        @if (ChatState.LastMessage(room.Key) is { } last)
+                        @if (lastMessage is { } last)
                         {
                             <text>@last.SentAt.ToLocalTime().ToString("HH:mm")</text>
                         }
@@ -998,7 +1012,7 @@
                 </div>
                 <div class="room-bottom">
                     <div class="room-desc">
-                        @if (ChatState.LastMessage(room.Key) is { } preview)
+                        @if (lastMessage is { } preview)
                         {
                             <text>@preview.User.DisplayName: @preview.Text</text>
                         }

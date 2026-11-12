@@ -1,5 +1,14 @@
-window.chatScroll = (el) => {
-    if (el) el.scrollTop = el.scrollHeight;
+// Scrolls the feed to the bottom. Unless forced, it only does so when the user has not
+// scrolled up to read older messages.
+window.chatScroll = (el, force) => {
+    if (!el) return;
+    if (el.__stick === undefined) {
+        el.__stick = true;
+        el.addEventListener('scroll', () => {
+            el.__stick = el.scrollHeight - el.scrollTop - el.clientHeight < 40;
+        });
+    }
+    if (force || el.__stick) el.scrollTop = el.scrollHeight;
 };
 
 window.chatFocus = (id) => {
